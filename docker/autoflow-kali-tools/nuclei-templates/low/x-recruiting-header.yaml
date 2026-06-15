@@ -1,0 +1,17 @@
+id: autoflow-x-recruiting-header
+
+info:
+  name: Recruiting Header Present
+  author: autoflow
+  severity: info
+  description: Detects x-recruiting headers that may disclose application hints.
+  tags: autoflow,recon,http,headers
+
+http:
+  - method: GET
+    path:
+      - "{{BaseURL}}/"
+    matchers:
+      - type: dsl
+        dsl:
+          - "contains(to_lower(all_headers), 'x-recruiting:')"

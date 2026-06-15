@@ -1,0 +1,44 @@
+id: autoflow-security-config-checks
+
+info:
+  name: Browser Security Configuration Checks
+  author: autoflow
+  severity: low
+  description: Detects missing or weak browser-facing security configuration.
+  tags: autoflow,discovery,http,headers,cors,csp,hsts,cookie,cache
+
+http:
+  - method: GET
+    path:
+      - "{{BaseURL}}/"
+    matchers-condition: or
+    matchers:
+      - type: dsl
+        name: cors-wildcard
+        dsl:
+          - "contains(to_lower(all_headers), 'access-control-allow-origin: *')"
+      - type: dsl
+        name: missing-csp
+        dsl:
+          - "status_code >= 200 && status_code < 400 && !contains(to_lower(all_headers), 'content-security-policy:')"
+      - type: dsl
+        name: missing-hsts-on-https
+        dsl:
+          - "contains(BaseURL, 'https://') && status_code >= 200 && status_code < 400 && !contains(to_lower(all_headers), 'strict-transport-security:')"
+      - type: dsl
+        name: missing-x-frame-options
+        dsl:
+          - "status_code >= 200 && status_code < 400 && !contains(to_lower(all_headers), 'x-frame-options:') && !contains(to_lower(all_headers), 'content-security-policy:')"
+      - type: dsl
+        name: cookie-missing-secure
+        dsl:
+          - "contains(to_lower(all_headers), 'set-cookie:') && !contains(to_lower(all_headers), 'secure')"
+      - type: dsl
+        name: cookie-missing-httponly
+        dsl:
+          - "contains(to_lower(all_headers), 'set-cookie:') && !contains(to_lower(all_headers), 'httponly')"
+      - type: dsl
+        name: weak-cache-control
+        dsl:
+          - "status_code >= 200 && status_code < 400 && !contains(to_lower(all_headers), 'cache-control: no-store') && !contains(to_lower(all_headers), 'cache-control: no-cache')"
+

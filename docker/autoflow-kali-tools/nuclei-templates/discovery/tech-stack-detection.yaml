@@ -1,0 +1,42 @@
+id: autoflow-tech-stack-detection
+
+info:
+  name: Web Technology Stack Hints
+  author: autoflow
+  severity: info
+  description: Detects common Angular, Express, Node.js, and SPA indicators.
+  tags: autoflow,discovery,http,tech,spa,node,angular,express
+
+http:
+  - method: GET
+    path:
+      - "{{BaseURL}}/"
+    matchers-condition: or
+    matchers:
+      - type: word
+        name: angular-runtime
+        part: body
+        words:
+          - "ng-version"
+          - "ng-app"
+          - "runtime."
+          - "polyfills."
+          - "main."
+        condition: or
+      - type: word
+        name: spa-root
+        part: body
+        words:
+          - "<app-root"
+          - "<div id=\"root\""
+          - "<div id=\"app\""
+        condition: or
+      - type: dsl
+        name: express-node-header
+        dsl:
+          - "contains(to_lower(all_headers), 'x-powered-by: express')"
+      - type: dsl
+        name: javascript-heavy
+        dsl:
+          - "status_code >= 200 && status_code < 400 && contains(to_lower(body), '<script') && contains(to_lower(body), '.js')"
+

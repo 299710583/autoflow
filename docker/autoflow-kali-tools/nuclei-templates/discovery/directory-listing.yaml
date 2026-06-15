@@ -1,0 +1,35 @@
+id: autoflow-directory-listing
+
+info:
+  name: Directory Listing Exposed
+  author: autoflow
+  severity: medium
+  description: Detects directory listing pages that expose file names.
+  tags: autoflow,discovery,http,directory-listing,exposure
+
+http:
+  - method: GET
+    path:
+      - "{{BaseURL}}/"
+      - "{{BaseURL}}/ftp"
+      - "{{BaseURL}}/files"
+      - "{{BaseURL}}/backup"
+      - "{{BaseURL}}/backups"
+      - "{{BaseURL}}/uploads"
+      - "{{BaseURL}}/download"
+      - "{{BaseURL}}/downloads"
+      - "{{BaseURL}}/public"
+    matchers-condition: and
+    matchers:
+      - type: status
+        status:
+          - 200
+      - type: word
+        part: body
+        words:
+          - "Index of"
+          - "Parent Directory"
+          - "Directory listing"
+          - "[To Parent Directory]"
+        condition: or
+

@@ -1,0 +1,81 @@
+id: autoflow-sensitive-paths
+
+info:
+  name: Sensitive or Interesting Paths Exposed
+  author: autoflow
+  severity: low
+  description: Detects commonly interesting web paths for follow-up discovery.
+  tags: autoflow,discovery,http,path,content
+
+http:
+  - method: GET
+    path:
+      - "{{BaseURL}}/admin"
+    matchers-condition: and
+    matchers:
+      - type: status
+        status:
+          - 200
+          - 401
+          - 403
+      - type: dsl
+        dsl:
+          - "status_code == 401 || status_code == 403 || contains(to_lower(body), 'admin') || contains(to_lower(body), 'login') || contains(to_lower(body), 'dashboard')"
+
+  - method: GET
+    path:
+      - "{{BaseURL}}/api"
+      - "{{BaseURL}}/rest"
+      - "{{BaseURL}}/swagger"
+      - "{{BaseURL}}/graphql"
+    matchers-condition: and
+    matchers:
+      - type: status
+        status:
+          - 200
+          - 401
+          - 403
+      - type: dsl
+        dsl:
+          - "status_code == 401 || status_code == 403 || contains(to_lower(all_headers), 'application/json') || starts_with(trim(body), '{') || starts_with(trim(body), '[') || contains(to_lower(body), 'swagger') || contains(to_lower(body), 'openapi') || contains(to_lower(body), 'graphql')"
+
+  - method: GET
+    path:
+      - "{{BaseURL}}/.well-known"
+    matchers-condition: and
+    matchers:
+      - type: status
+        status:
+          - 200
+          - 403
+      - type: dsl
+        dsl:
+          - "status_code != 404 && status_code != 410"
+
+  - method: GET
+    path:
+      - "{{BaseURL}}/robots.txt"
+    matchers-condition: and
+    matchers:
+      - type: status
+        status:
+          - 200
+      - type: word
+        part: body
+        words:
+          - "User-agent"
+
+  - method: GET
+    path:
+      - "{{BaseURL}}/sitemap.xml"
+    matchers-condition: and
+    matchers:
+      - type: status
+        status:
+          - 200
+      - type: word
+        part: body
+        words:
+          - "<urlset"
+          - "<sitemapindex"
+        condition: or

@@ -1,0 +1,27 @@
+id: autoflow-missing-security-headers
+
+info:
+  name: Common Security Headers Missing
+  author: autoflow
+  severity: low
+  description: Detects responses missing common browser-facing security headers.
+  tags: autoflow,recon,http,headers
+
+http:
+  - method: GET
+    path:
+      - "{{BaseURL}}/"
+    matchers-condition: or
+    matchers:
+      - type: dsl
+        name: missing-csp
+        dsl:
+          - "status_code >= 200 && status_code < 400 && !contains(to_lower(all_headers), 'content-security-policy:')"
+      - type: dsl
+        name: missing-referrer-policy
+        dsl:
+          - "status_code >= 200 && status_code < 400 && !contains(to_lower(all_headers), 'referrer-policy:')"
+      - type: dsl
+        name: missing-permissions-policy
+        dsl:
+          - "status_code >= 200 && status_code < 400 && !contains(to_lower(all_headers), 'permissions-policy:')"

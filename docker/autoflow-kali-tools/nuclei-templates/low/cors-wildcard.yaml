@@ -1,0 +1,17 @@
+id: autoflow-cors-wildcard
+
+info:
+  name: Wildcard CORS Header
+  author: autoflow
+  severity: low
+  description: Detects Access-Control-Allow-Origin wildcard responses.
+  tags: autoflow,recon,http,cors
+
+http:
+  - method: GET
+    path:
+      - "{{BaseURL}}/"
+    matchers:
+      - type: dsl
+        dsl:
+          - "contains(to_lower(all_headers), 'access-control-allow-origin: *')"

@@ -1,0 +1,44 @@
+id: autoflow-debug-endpoints
+
+info:
+  name: Debug or Diagnostic Endpoints Exposed
+  author: autoflow
+  severity: medium
+  description: Detects common debug, diagnostic, or admin-like endpoints.
+  tags: autoflow,discovery,http,debug,diagnostic,exposure
+
+http:
+  - method: GET
+    path:
+      - "{{BaseURL}}/debug"
+      - "{{BaseURL}}/debug/"
+      - "{{BaseURL}}/status"
+      - "{{BaseURL}}/health"
+      - "{{BaseURL}}/metrics"
+      - "{{BaseURL}}/actuator"
+      - "{{BaseURL}}/actuator/health"
+      - "{{BaseURL}}/actuator/env"
+      - "{{BaseURL}}/server-status"
+      - "{{BaseURL}}/phpinfo.php"
+      - "{{BaseURL}}/__debugger__"
+      - "{{BaseURL}}/_debug_toolbar"
+    matchers-condition: and
+    matchers:
+      - type: status
+        status:
+          - 200
+          - 401
+          - 403
+      - type: word
+        part: body
+        words:
+          - "debug"
+          - "status"
+          - "health"
+          - "metrics"
+          - "actuator"
+          - "phpinfo"
+          - "Werkzeug"
+          - "server-status"
+        condition: or
+

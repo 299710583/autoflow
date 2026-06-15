@@ -1,0 +1,22 @@
+id: autoflow-robots-txt
+
+info:
+  name: Robots.txt Present
+  author: autoflow
+  severity: info
+  description: Detects a publicly accessible robots.txt file.
+  tags: autoflow,recon,http,robots
+
+http:
+  - method: GET
+    path:
+      - "{{BaseURL}}/robots.txt"
+    matchers-condition: and
+    matchers:
+      - type: status
+        status:
+          - 200
+      - type: word
+        part: body
+        words:
+          - "User-agent"

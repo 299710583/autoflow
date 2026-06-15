@@ -1,0 +1,43 @@
+id: autoflow-public-config-files
+
+info:
+  name: Public Configuration or Metadata Files
+  author: autoflow
+  severity: medium
+  description: Detects publicly reachable configuration, metadata, or manifest files.
+  tags: autoflow,discovery,http,config,exposure,metadata
+
+http:
+  - method: GET
+    path:
+      - "{{BaseURL}}/package.json"
+      - "{{BaseURL}}/package-lock.json"
+      - "{{BaseURL}}/yarn.lock"
+      - "{{BaseURL}}/.env"
+      - "{{BaseURL}}/.env.local"
+      - "{{BaseURL}}/.git/config"
+      - "{{BaseURL}}/config.json"
+      - "{{BaseURL}}/settings.json"
+      - "{{BaseURL}}/manifest.json"
+      - "{{BaseURL}}/asset-manifest.json"
+      - "{{BaseURL}}/swagger.json"
+      - "{{BaseURL}}/openapi.json"
+    matchers-condition: and
+    matchers:
+      - type: status
+        status:
+          - 200
+      - type: word
+        part: body
+        words:
+          - "\"dependencies\""
+          - "\"scripts\""
+          - "DB_PASSWORD"
+          - "DATABASE_URL"
+          - "[core]"
+          - "\"swagger\""
+          - "\"openapi\""
+          - "\"name\""
+          - "\"version\""
+        condition: or
+

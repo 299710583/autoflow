@@ -1,0 +1,30 @@
+id: autoflow-api-exposure
+
+info:
+  name: Web API Endpoints Exposed
+  author: autoflow
+  severity: medium
+  description: Detects exposed API endpoints that may need follow-up validation.
+  tags: autoflow,discovery,http,api,juice-shop
+
+http:
+  - method: GET
+    path:
+      - "{{BaseURL}}/rest/products/search?q="
+      - "{{BaseURL}}/api/Challenges"
+      - "{{BaseURL}}/rest/user/whoami"
+      - "{{BaseURL}}/rest/basket"
+      - "{{BaseURL}}/api"
+      - "{{BaseURL}}/rest"
+      - "{{BaseURL}}/graphql"
+    matchers-condition: and
+    matchers:
+      - type: status
+        status:
+          - 200
+          - 401
+          - 403
+      - type: dsl
+        dsl:
+          - "contains(to_lower(all_headers), 'application/json') || starts_with(trim(body), '{') || starts_with(trim(body), '[') || contains(to_lower(body), 'graphql')"
+
