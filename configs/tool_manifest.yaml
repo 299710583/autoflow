@@ -1,0 +1,305 @@
+tools:
+  - tool: whatweb
+    profile: web_fingerprint
+    phase: discovery
+    action_kind: tool
+    purpose: Identify web technologies, page title, framework hints, and notable response headers.
+    input_schema:
+      target: http_url
+    risk_level: low
+    approval_required: false
+    best_for:
+      - initial web fingerprinting
+      - title and header clues
+      - quick technology hints
+    avoid_when:
+      - target is not an HTTP or HTTPS URL
+    output_summary: Text fingerprint parsed into title and header observations.
+
+  - tool: nikto
+    profile: basic_web_check
+    phase: discovery
+    action_kind: tool
+    purpose: Run read-only web server checks for common misconfigurations, exposed files, headers, and basic server issues.
+    input_schema:
+      target: http_url
+      maxtime: seconds
+    risk_level: low
+    approval_required: false
+    best_for:
+      - basic web server exposure checks
+      - exposed files and headers
+      - first-pass web misconfiguration discovery
+    avoid_when:
+      - target is not HTTP or HTTPS
+      - the site is too large and no time budget is set
+    output_summary: Nikto text findings parsed into tool observations.
+
+  - tool: nuclei
+    profile: discovery_all_severity
+    phase: discovery
+    action_kind: tool
+    purpose: Run AutoFlow read-only discovery templates for technology hints, sensitive paths, API exposure, security headers, directory listing, public config files, and debug endpoints.
+    input_schema:
+      target: http_url
+    risk_level: low
+    approval_required: false
+    best_for:
+      - candidate finding discovery
+      - API exposure checks
+      - security configuration checks
+      - sensitive path discovery
+      - debug endpoint discovery
+    avoid_when:
+      - target is not HTTP or HTTPS
+      - validation requires authenticated state or active exploitation
+    output_summary: Nuclei template matches parsed into candidate risk signals.
+
+  - tool: script_runner
+    profile: security_headers_check
+    phase: discovery
+    action_kind: script
+    purpose: Run a constrained read-only HTTP header check when packaged tools do not answer a narrow question.
+    input_schema:
+      target: http_url
+    risk_level: low
+    approval_required: false
+    best_for:
+      - confirming missing browser security headers
+      - checking CORS header behavior
+      - lightweight custom read-only checks
+    avoid_when:
+      - the task needs state-changing requests
+      - the task needs exploit payloads or brute force
+    output_summary: JSON-like script output parsed into header and CORS signals.
+
+  - tool: web_recon
+    profile: fetch_page
+    phase: discovery
+    action_kind: web_recon
+    purpose: Fetch and parse a page or endpoint to collect title, links, forms, scripts, interesting paths, robots.txt, and sitemap context.
+    input_schema:
+      target: http_url
+    risk_level: low
+    approval_required: false
+    best_for:
+      - newly discovered paths
+      - page structure refresh
+      - forms and script discovery
+      - robots and sitemap context
+    avoid_when:
+      - target is not HTTP or HTTPS
+    output_summary: Structured web context added to memory and observations.
+
+  - tool: subfinder
+    profile: passive_domain_enum
+    phase: discovery
+    action_kind: tool
+    purpose: Passively enumerate subdomains for an authorized root domain.
+    input_schema:
+      target: domain
+    risk_level: low
+    approval_required: false
+    best_for:
+      - external domain reconnaissance
+      - discovering related HTTP targets before probing
+    avoid_when:
+      - target is an IP address
+      - target is a full URL rather than a root domain
+    output_summary: Passive subdomain list summarized into discovered target candidates.
+
+  - tool: feroxbuster
+    profile: small_directory_check
+    phase: discovery
+    action_kind: tool
+    purpose: Run small, rate-limited directory and path discovery against an authorized web target.
+    input_schema:
+      target: http_url
+    risk_level: medium
+    approval_required: false
+    best_for:
+      - finding hidden web paths
+      - complementing dirsearch, gobuster, and ffuf results
+    avoid_when:
+      - target is not HTTP or HTTPS
+      - the assessment requires very low request volume only
+    output_summary: Discovered paths and status codes summarized into observations.
+
+  - tool: sqlmap
+    profile: basic_get_param_check
+    phase: validation
+    action_kind: tool
+    purpose: Run bounded SQL injection validation against an authorized URL with query parameters.
+    input_schema:
+      target: http_url_with_query
+    risk_level: high
+    approval_required: false
+    best_for:
+      - validating suspected injectable GET parameters
+      - confirming scanner-reported SQL injection candidates
+    avoid_when:
+      - no query parameter exists
+      - no prior observation suggests injection risk
+      - target is outside the authorized lab or assessment scope
+    output_summary: SQLMap evidence summarized into validation result and finding status.
+
+  - tool: hydra
+    profile: single_credential_check
+    phase: validation
+    action_kind: tool
+    purpose: Validate one known username/password pair against an authorized network service.
+    input_schema:
+      target: host
+      service: service_name
+      port: port
+      username: string
+      password: string
+    risk_level: high
+    approval_required: false
+    best_for:
+      - confirming a known/default credential candidate
+      - checking credentials discovered from public config or documentation
+    avoid_when:
+      - no specific credential pair is known
+      - a wordlist brute-force attempt is needed
+    output_summary: Authentication success or failure summarized as validation evidence.
+
+  - tool: medusa
+    profile: single_credential_check
+    phase: validation
+    action_kind: tool
+    purpose: Validate one known username/password pair against an authorized network service.
+    input_schema:
+      target: host
+      service: service_name
+      port: port
+      username: string
+      password: string
+    risk_level: high
+    approval_required: false
+    best_for:
+      - confirming a known/default credential candidate
+      - cross-checking hydra behavior for supported services
+    avoid_when:
+      - no specific credential pair is known
+      - a wordlist brute-force attempt is needed
+    output_summary: Authentication success or failure summarized as validation evidence.
+
+  - tool: smbclient
+    profile: anonymous_share_list
+    phase: discovery
+    action_kind: tool
+    purpose: List SMB shares anonymously on an authorized SMB host.
+    input_schema:
+      target: host
+    risk_level: medium
+    approval_required: false
+    best_for:
+      - checking anonymous SMB share exposure
+      - validating SMB service exposure from nmap results
+    avoid_when:
+      - target has no SMB service
+      - authenticated SMB enumeration is required
+    output_summary: Anonymous SMB share listing summarized into observations.
+
+  - tool: enum4linux
+    profile: basic_smb_enum
+    phase: discovery
+    action_kind: tool
+    purpose: Enumerate SMB information from an authorized SMB host.
+    input_schema:
+      target: host
+    risk_level: medium
+    approval_required: false
+    best_for:
+      - SMB host discovery
+      - workgroup, share, user, and policy hints
+    avoid_when:
+      - target has no SMB service
+      - stealthy assessment constraints prohibit noisy enumeration
+    output_summary: SMB enumeration output summarized into observations.
+
+  - tool: smbmap
+    profile: anonymous_share_enum
+    phase: discovery
+    action_kind: tool
+    purpose: Enumerate SMB shares and anonymous permissions on an authorized host.
+    input_schema:
+      target: host
+    risk_level: medium
+    approval_required: false
+    best_for:
+      - anonymous SMB permission checks
+      - share exposure validation
+    avoid_when:
+      - target has no SMB service
+      - authenticated enumeration is needed
+    output_summary: SMB share and permission results summarized into observations.
+
+  - tool: trivy
+    profile: filesystem_audit
+    phase: artifact_audit
+    action_kind: tool
+    purpose: Scan an AutoFlow artifact/source directory for vulnerabilities, secrets, and misconfigurations.
+    input_schema:
+      path: project_data_path
+    risk_level: medium
+    approval_required: false
+    best_for:
+      - auditing downloaded source packages
+      - checking container or app artifacts collected during assessment
+    avoid_when:
+      - the path is outside data/artifacts, data/source, or data/source_audit
+      - the input is only a remote URL with no local artifact
+    output_summary: JSON scan results summarized into artifact audit observations.
+
+  - tool: bandit
+    profile: python_source_audit
+    phase: artifact_audit
+    action_kind: tool
+    purpose: Scan Python source artifacts for security issues.
+    input_schema:
+      path: project_data_path
+    risk_level: low
+    approval_required: false
+    best_for:
+      - Python source code gathered as an assessment artifact
+      - reviewing challenge source packages
+    avoid_when:
+      - the artifact is not Python source
+      - the path is outside allowed AutoFlow data directories
+    output_summary: JSON Bandit findings summarized into artifact audit observations.
+
+  - tool: gitleaks
+    profile: secret_scan
+    phase: artifact_audit
+    action_kind: tool
+    purpose: Scan artifacts or source directories for leaked secrets.
+    input_schema:
+      path: project_data_path
+    risk_level: low
+    approval_required: false
+    best_for:
+      - downloaded repositories
+      - exposed package archives
+      - public config bundles
+    avoid_when:
+      - the path is outside allowed AutoFlow data directories
+    output_summary: Redacted secret findings summarized into artifact audit observations.
+
+  - tool: semgrep
+    profile: source_audit
+    phase: artifact_audit
+    action_kind: tool
+    purpose: Run Semgrep auto rules against artifact/source code.
+    input_schema:
+      path: project_data_path
+    risk_level: low
+    approval_required: false
+    best_for:
+      - source code security review
+      - identifying framework-specific vulnerable patterns
+    avoid_when:
+      - no local source artifact exists
+      - the path is outside allowed AutoFlow data directories
+    output_summary: JSON Semgrep findings summarized into artifact audit observations.

@@ -1,0 +1,105 @@
+tools:
+  curl:
+    method: apt
+    package: curl
+    risk: low
+  amass:
+    method: apt
+    package: amass
+    risk: medium
+  dirb:
+    method: apt
+    package: dirb
+    risk: medium
+  dirsearch:
+    method: apt
+    package: dirsearch
+    risk: medium
+  httpx-toolkit:
+    method: apt
+    package: httpx-toolkit
+    risk: low
+  enum4linux:
+    method: apt
+    package: enum4linux
+    risk: medium
+  feroxbuster:
+    method: apt
+    package: feroxbuster
+    risk: medium
+  ffuf:
+    method: apt
+    package: ffuf
+    risk: medium
+  gobuster:
+    method: apt
+    package: gobuster
+    risk: medium
+  hydra:
+    method: apt
+    package: hydra
+    risk: high
+  medusa:
+    method: apt
+    package: medusa
+    risk: high
+  nikto:
+    method: apt
+    package: nikto
+    risk: low
+  naabu:
+    method: apt
+    package: naabu
+    risk: medium
+  nuclei:
+    method: apt
+    package: nuclei
+    risk: medium
+  smbclient:
+    method: apt
+    package: smbclient
+    risk: medium
+  smbmap:
+    method: apt
+    package: smbmap
+    risk: medium
+  sqlmap:
+    method: apt
+    package: sqlmap
+    risk: high
+  sslscan:
+    method: apt
+    package: sslscan
+    risk: low
+  subfinder:
+    method: apt
+    package: subfinder
+    risk: medium
+  testssl.sh:
+    method: apt
+    package: testssl.sh
+    risk: low
+  wafw00f:
+    method: apt
+    package: wafw00f
+    risk: low
+  whatweb:
+    method: apt
+    package: whatweb
+    risk: low
+  semgrep:
+    method: apt
+    package: semgrep
+    risk: medium
+  trivy:
+    method: apt
+    package: trivy
+    risk: medium
+  bandit:
+    method: apt
+    package: bandit
+    risk: medium
+  gitleaks:
+    method: apt
+    package: gitleaks
+    risk: medium

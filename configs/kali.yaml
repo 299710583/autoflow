@@ -1,0 +1,9 @@
+kali:
+  connection: ssh
+  host: ${KALI_HOST}
+  port: ${KALI_PORT}
+  username: ${KALI_USERNAME}
+  password: ${KALI_PASSWORD}
+  key_path: ${KALI_KEY_PATH}
+  workdir: /tmp/autoflow
+

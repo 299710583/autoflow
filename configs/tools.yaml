@@ -1,0 +1,371 @@
+tools:
+  nmap:
+    enabled: true
+    risk: low
+    executor: docker
+    image: autoflow-kali-tools:latest
+    profiles:
+      safe_service_scan:
+        template: "nmap -sV -T2 --version-light -oX {output} {target}"
+        allowed_args:
+          - target
+          - output
+        timeout: 300
+        parser: nmap_xml
+      safe_service_scan_port:
+        template: "nmap -sV -T2 --version-light -p {port} -oX {output} {target}"
+        allowed_args:
+          - target
+          - port
+          - output
+        timeout: 300
+        parser: nmap_xml
+  whatweb:
+    enabled: true
+    risk: low
+    executor: docker
+    image: autoflow-kali-tools:latest
+    profiles:
+      web_fingerprint:
+        template: "whatweb --colour never --no-errors --open-timeout 5 --read-timeout 10 {target}"
+        allowed_args:
+          - target
+        timeout: 180
+        parser: text
+  httpx:
+    enabled: true
+    risk: low
+    executor: docker
+    image: autoflow-kali-tools:latest
+    profiles:
+      web_probe:
+        template: "httpx-toolkit -u {target} -status-code -title -tech-detect -web-server -follow-redirects -silent -timeout 10 -retries 0"
+        allowed_args:
+          - target
+        timeout: 180
+        parser: text
+  curl:
+    enabled: true
+    risk: low
+    executor: docker
+    image: autoflow-kali-tools:latest
+    profiles:
+      head:
+        template: "curl -sS -I -L --max-time 10 -A AutoFlow/0.1 {target}"
+        allowed_args:
+          - target
+        timeout: 60
+        parser: text
+      get:
+        template: "curl -sS -L --max-time 10 -A AutoFlow/0.1 {target}"
+        allowed_args:
+          - target
+        timeout: 60
+        parser: text
+      get_with_headers:
+        template: "curl -sS -i -L --max-time 10 -A AutoFlow/0.1 {target}"
+        allowed_args:
+          - target
+        timeout: 60
+        parser: text
+  dirsearch:
+    enabled: true
+    risk: medium
+    executor: docker
+    image: autoflow-kali-tools:latest
+    profiles:
+      small_web_path_check:
+        template: "dirsearch -u {target} -q -e php,js,txt,json,bak,old,zip -t 5 --timeout=10 --max-rate=10"
+        allowed_args:
+          - target
+        timeout: 600
+        parser: text
+        risk: medium
+  naabu:
+    enabled: true
+    risk: medium
+    executor: docker
+    image: autoflow-kali-tools:latest
+    profiles:
+      top_ports:
+        template: "naabu -host {target} -top-ports 100 -rate 100 -silent"
+        allowed_args:
+          - target
+        timeout: 300
+        parser: text
+        risk: medium
+  subfinder:
+    enabled: true
+    risk: low
+    executor: docker
+    image: autoflow-kali-tools:latest
+    profiles:
+      passive_domain_enum:
+        template: "subfinder -d {target} -silent -all"
+        allowed_args:
+          - target
+        timeout: 600
+        parser: text
+  testssl:
+    enabled: true
+    risk: low
+    executor: docker
+    image: autoflow-kali-tools:latest
+    profiles:
+      fast_tls_check:
+        template: "testssl --fast --warnings batch {target}"
+        allowed_args:
+          - target
+        timeout: 600
+        parser: text
+  nikto:
+    enabled: true
+    risk: low
+    executor: docker
+    image: autoflow-kali-tools:latest
+    profiles:
+      basic_web_check:
+        template: "nikto -nointeractive -maxtime {maxtime} -host {target}"
+        allowed_args:
+          - target
+          - maxtime
+        timeout: 240
+        parser: text
+  nuclei:
+    enabled: true
+    risk: medium
+    executor: docker
+    image: autoflow-kali-tools:latest
+    profiles:
+      discovery_all_severity:
+        template: "nuclei -u {target} -t /opt/autoflow/nuclei-templates -severity info,low,medium,high,critical -pt http -duc -ni -no-stdin -nc -rl 2 -c 2 -timeout 5 -retries 0 -silent"
+        allowed_args:
+          - target
+        timeout: 180
+        parser: text
+        risk: low
+      low_severity_templates:
+        template: "nuclei -u {target} -t /opt/autoflow/nuclei-templates/low -severity info,low -pt http -duc -ni -no-stdin -nc -rl 2 -c 2 -timeout 5 -retries 0 -silent"
+        allowed_args:
+          - target
+        timeout: 120
+        parser: text
+        risk: low
+      medium_severity_templates:
+        template: "nuclei -u {target} -t /opt/autoflow/nuclei-templates/medium -severity medium -pt http -duc -ni -no-stdin -nc -rl 2 -c 2 -timeout 5 -retries 0 -silent"
+        allowed_args:
+          - target
+        timeout: 180
+        parser: text
+        risk: medium
+  wafw00f:
+    enabled: true
+    risk: low
+    executor: docker
+    image: autoflow-kali-tools:latest
+    profiles:
+      detect_waf:
+        template: "wafw00f --no-colors {target}"
+        allowed_args:
+          - target
+        timeout: 180
+        parser: text
+  sslscan:
+    enabled: true
+    risk: low
+    executor: docker
+    image: autoflow-kali-tools:latest
+    profiles:
+      tls_summary:
+        template: "sslscan --no-colour {target}"
+        allowed_args:
+          - target
+        timeout: 240
+        parser: text
+  gobuster:
+    enabled: true
+    risk: medium
+    executor: docker
+    image: autoflow-kali-tools:latest
+    profiles:
+      small_directory_check:
+        template: "gobuster dir -q -t 5 -w /usr/share/wordlists/dirb/common.txt -u {target}"
+        allowed_args:
+          - target
+        timeout: 600
+        parser: text
+        risk: medium
+  ffuf:
+    enabled: true
+    risk: medium
+    executor: docker
+    image: autoflow-kali-tools:latest
+    profiles:
+      small_directory_check:
+        template: "ffuf -s -rate 10 -t 5 -w /usr/share/wordlists/dirb/common.txt -u {target}/FUZZ"
+        allowed_args:
+          - target
+        timeout: 600
+        parser: text
+        risk: medium
+  feroxbuster:
+    enabled: true
+    risk: medium
+    executor: docker
+    image: autoflow-kali-tools:latest
+    profiles:
+      small_directory_check:
+        template: "feroxbuster -u {target} -w /usr/share/wordlists/dirb/common.txt -t 5 --rate-limit 10 --depth 1 --no-recursion --silent -k"
+        allowed_args:
+          - target
+        timeout: 600
+        parser: text
+        risk: medium
+  sqlmap:
+    enabled: true
+    risk: high
+    executor: docker
+    image: autoflow-kali-tools:latest
+    profiles:
+      basic_get_param_check:
+        template: "sqlmap -u {target} --batch --smart --level 1 --risk 1 --threads 1 --timeout 10 --retries 0 --flush-session"
+        allowed_args:
+          - target
+        timeout: 900
+        parser: text
+        risk: high
+  hydra:
+    enabled: true
+    risk: high
+    executor: docker
+    image: autoflow-kali-tools:latest
+    profiles:
+      single_credential_check:
+        description: "Validate one known username/password pair against an authorized network service. Not a wordlist brute-force profile."
+        template: "hydra -l {username} -p {password} -s {port} -t 2 -W 5 -f {target} {service}"
+        allowed_args:
+          - target
+          - service
+          - port
+          - username
+          - password
+        timeout: 300
+        parser: text
+        risk: high
+  medusa:
+    enabled: true
+    risk: high
+    executor: docker
+    image: autoflow-kali-tools:latest
+    profiles:
+      single_credential_check:
+        description: "Validate one known username/password pair against an authorized network service. Not a wordlist brute-force profile."
+        template: "medusa -h {target} -n {port} -u {username} -p {password} -M {service} -T 1 -f"
+        allowed_args:
+          - target
+          - service
+          - port
+          - username
+          - password
+        timeout: 300
+        parser: text
+        risk: high
+  smbclient:
+    enabled: true
+    risk: medium
+    executor: docker
+    image: autoflow-kali-tools:latest
+    profiles:
+      anonymous_share_list:
+        description: "List SMB shares anonymously on an authorized SMB host."
+        template: "smbclient -L //{target}/ -N -g"
+        allowed_args:
+          - target
+        timeout: 240
+        parser: text
+        risk: medium
+  enum4linux:
+    enabled: true
+    risk: medium
+    executor: docker
+    image: autoflow-kali-tools:latest
+    profiles:
+      basic_smb_enum:
+        description: "Enumerate SMB information from an authorized host."
+        template: "enum4linux -a {target}"
+        allowed_args:
+          - target
+        timeout: 600
+        parser: text
+        risk: medium
+  smbmap:
+    enabled: true
+    risk: medium
+    executor: docker
+    image: autoflow-kali-tools:latest
+    profiles:
+      anonymous_share_enum:
+        description: "Enumerate SMB shares and permissions anonymously on an authorized host."
+        template: "smbmap -H {target}"
+        allowed_args:
+          - target
+        timeout: 300
+        parser: text
+        risk: medium
+  trivy:
+    enabled: true
+    risk: medium
+    executor: docker
+    image: autoflow-kali-tools:latest
+    profiles:
+      filesystem_audit:
+        description: "Scan an AutoFlow artifact/source directory mounted into the tool container for vulnerabilities, secrets, and misconfigurations."
+        target_required: false
+        template: "trivy fs --quiet --scanners vuln,secret,misconfig --format json {path}"
+        allowed_args:
+          - path
+        timeout: 900
+        parser: json
+        risk: medium
+  bandit:
+    enabled: true
+    risk: low
+    executor: docker
+    image: autoflow-kali-tools:latest
+    profiles:
+      python_source_audit:
+        description: "Scan an AutoFlow artifact/source directory for Python security issues."
+        target_required: false
+        template: "bandit -r {path} -f json -q"
+        allowed_args:
+          - path
+        timeout: 600
+        parser: json
+  gitleaks:
+    enabled: true
+    risk: low
+    executor: docker
+    image: autoflow-kali-tools:latest
+    profiles:
+      secret_scan:
+        description: "Scan an AutoFlow artifact/source directory for leaked secrets."
+        target_required: false
+        template: "gitleaks detect --source {path} --no-banner --redact --report-format json"
+        allowed_args:
+          - path
+        timeout: 600
+        parser: json
+  semgrep:
+    enabled: true
+    risk: low
+    executor: docker
+    image: autoflow-kali-tools:latest
+    profiles:
+      source_audit:
+        description: "Run Semgrep auto rules against an AutoFlow artifact/source directory."
+        target_required: false
+        template: "semgrep scan --config auto --quiet --json {path}"
+        allowed_args:
+          - path
+        timeout: 900
+        parser: json

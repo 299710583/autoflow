@@ -1,0 +1,14 @@
+policy:
+  default_allowed_risk:
+    - low
+  require_approval:
+    - medium
+    - high
+    - critical
+  forbidden_actions:
+    - exploit
+    - privilege_escalation
+    - lateral_movement
+    - persistence
+    - destructive_write
+

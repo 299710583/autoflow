@@ -1,0 +1,13 @@
+agents:
+  planner:
+    enabled: true
+  recon:
+    enabled: true
+  executor:
+    enabled: true
+    require_approval_for_high_risk: true
+  verifier:
+    enabled: true
+  reporter:
+    enabled: true
+
