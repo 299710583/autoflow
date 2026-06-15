@@ -1,0 +1,2 @@
+"""Target domain model."""
+

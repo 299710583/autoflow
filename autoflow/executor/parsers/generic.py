@@ -1,0 +1,2 @@
+"""Generic output parser."""
+
