@@ -56,7 +56,9 @@ class ToolDispatcher:
     def dispatch(self, name: str, arguments: dict[str, Any], state: AutoFlowState) -> dict[str, Any]:
         try:
             if name == "read_agent_memory":
-                return self._ok(name, "", self.memory_builder.build(state), "Returned agent memory pack.")
+                memory = self.memory_builder.build(state, persisted_memory=state.get("agent_memory"))
+                state["agent_memory"] = memory
+                return self._ok(name, "", memory, "Returned agent memory pack.")
             if name == "list_known_targets":
                 targets = sorted(self._known_targets(state))
                 return self._ok(name, "", {"targets": targets}, f"Returned {len(targets)} known targets.")

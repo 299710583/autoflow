@@ -134,13 +134,13 @@ class DiscoveryReasonerAgent(BaseAgent):
             else:
                 attack_surfaces, test_plans = self._reason_with_llm(state, assets, web_recon, findings)
             state["attack_surfaces"] = [surface.model_dump(mode="json") for surface in attack_surfaces]
-            state["agent_memory"] = self.memory_builder.build(state)
-            state["memory_context"] = self.context_builder.build(state)
+            state["agent_memory"] = self.memory_builder.build(state, persisted_memory=state.get("agent_memory"))
+            state["memory_context"] = self.context_builder.build(state, persisted_memory=state["agent_memory"])
         else:
             attack_surfaces = self._analyze_attack_surfaces_by_rules(assets, web_recon)
             state["attack_surfaces"] = [surface.model_dump(mode="json") for surface in attack_surfaces]
-            state["agent_memory"] = self.memory_builder.build(state)
-            state["memory_context"] = self.context_builder.build(state)
+            state["agent_memory"] = self.memory_builder.build(state, persisted_memory=state.get("agent_memory"))
+            state["memory_context"] = self.context_builder.build(state, persisted_memory=state["agent_memory"])
             test_plans = self._generate_test_plans_by_rules(state, attack_surfaces, web_recon, findings)
 
         test_plans = self._dedupe_plans(test_plans)
@@ -190,7 +190,7 @@ class DiscoveryReasonerAgent(BaseAgent):
         web_recon: list[dict],
         findings: list[dict],
     ) -> tuple[list[AttackSurface], list[TestPlan]]:
-        memory = self.memory_builder.build(state)
+        memory = self.memory_builder.build(state, persisted_memory=state.get("agent_memory"))
         loop = self.tool_loop or AgentToolLoop(llm_client=self.llm_client)
         tool_manifest = self.tool_manifest.prompt_manifest("discovery")
         payload = {
@@ -275,7 +275,7 @@ class DiscoveryReasonerAgent(BaseAgent):
         findings: list[dict],
     ) -> tuple[list[AttackSurface], list[TestPlan]]:
         client = self.llm_client or LLMClient()
-        memory = self.memory_builder.build(state)
+        memory = self.memory_builder.build(state, persisted_memory=state.get("agent_memory"))
         tool_manifest = self.tool_manifest.prompt_manifest("discovery")
         messages = [{"role": "system", "content": DISCOVERY_REASONER_SYSTEM_PROMPT}]
 

@@ -11,6 +11,7 @@ from autoflow.flows.models import (
     ValidationPlan,
 )
 from autoflow.graph.state import AutoFlowState
+from autoflow.memory.agent_memory import AgentMemoryBuilder
 from autoflow.runtime.actions import canonical_target
 from autoflow.settings import settings
 from autoflow.tools.manifest import ToolManifestRegistry
@@ -39,11 +40,13 @@ class ValidationAgent(BaseAgent):
         tool_loop: AgentToolLoop | None = None,
         use_tool_calling: bool | None = None,
         tool_manifest: ToolManifestRegistry | None = None,
+        memory_builder: AgentMemoryBuilder | None = None,
     ) -> None:
         self.require_approval = require_approval
         self.tool_loop = tool_loop
         self.use_tool_calling = use_tool_calling
         self.tool_manifest = tool_manifest or ToolManifestRegistry()
+        self.memory_builder = memory_builder or AgentMemoryBuilder()
 
     async def run(self, state: AutoFlowState) -> AutoFlowState:
         state["current_phase"] = "validation_planning"
@@ -93,6 +96,7 @@ class ValidationAgent(BaseAgent):
         payload = {
             "task": "Create concrete validation plans for candidate findings.",
             "lab_mode": True,
+            "memory_pack": self.memory_builder.build(state, persisted_memory=state.get("agent_memory")),
             "findings": findings[-40:],
             "existing_validation_plans": existing[-40:],
             "rule_candidate_validation_plans": [plan.model_dump(mode="json") for plan in rule_plans],

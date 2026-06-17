@@ -8,6 +8,7 @@ from autoflow.flows.models import AssessmentFlow, AssessmentTask, FlowStatus, Ri
 from autoflow.graph.state import AutoFlowState
 from autoflow.llm.client import LLMClient
 from autoflow.llm.client import parse_json_object
+from autoflow.memory.agent_memory import AgentMemoryBuilder
 from autoflow.settings import settings
 
 
@@ -32,10 +33,12 @@ class PlannerAgent(BaseAgent):
         llm_client: LLMClient | None = None,
         use_llm: bool | None = None,
         json_repair_attempts: int = 3,
+        memory_builder: AgentMemoryBuilder | None = None,
     ) -> None:
         self.llm_client = llm_client
         self.use_llm = use_llm
         self.json_repair_attempts = json_repair_attempts
+        self.memory_builder = memory_builder or AgentMemoryBuilder()
 
     async def run(self, state: AutoFlowState) -> AutoFlowState:
         state["current_phase"] = "planning"
@@ -56,7 +59,7 @@ class PlannerAgent(BaseAgent):
             state["flow_id"] = flow.id
 
         # LLM 输出只作为候选计划，进入 Flow 前必须经过过滤。
-        planned_tasks = self._plan_tasks(flow)
+        planned_tasks = self._plan_tasks(flow, state)
         if planned_tasks:
             added_count = self._add_planned_tasks(flow, planned_tasks)
             if added_count == 0:
@@ -78,7 +81,7 @@ class PlannerAgent(BaseAgent):
         state["next_action"] = "recon"
         return state
 
-    def _plan_tasks(self, flow: AssessmentFlow) -> list[dict[str, Any]]:
+    def _plan_tasks(self, flow: AssessmentFlow, state: AutoFlowState) -> list[dict[str, Any]]:
         if not self._should_use_llm():
             return []
 
@@ -87,6 +90,7 @@ class PlannerAgent(BaseAgent):
         prompt = {
             "target_scope": flow.target_scope,
             "rules_of_engagement": flow.rules_of_engagement,
+            "memory_pack": self.memory_builder.build(state, persisted_memory=state.get("agent_memory")),
             "allowed_task_types": sorted(ALLOWED_PLANNER_TASK_TYPES),
             "allowed_risk_levels": sorted(ALLOWED_PLANNER_RISKS),
             "output_schema": {

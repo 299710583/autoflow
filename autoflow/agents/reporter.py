@@ -4,6 +4,7 @@ from autoflow.agents.base import BaseAgent
 from autoflow.agents.tool_loop import AgentToolLoop
 from autoflow.flows.models import FlowStatus, MemoryItem, MemoryKind
 from autoflow.graph.state import AutoFlowState
+from autoflow.memory.agent_memory import AgentMemoryBuilder
 from autoflow.settings import settings
 
 
@@ -23,9 +24,11 @@ class ReporterAgent(BaseAgent):
         self,
         tool_loop: AgentToolLoop | None = None,
         use_tool_calling: bool | None = None,
+        memory_builder: AgentMemoryBuilder | None = None,
     ) -> None:
         self.tool_loop = tool_loop
         self.use_tool_calling = use_tool_calling
+        self.memory_builder = memory_builder or AgentMemoryBuilder()
 
     async def run(self, state: AutoFlowState) -> AutoFlowState:
         state["current_phase"] = "reporting"
@@ -78,6 +81,7 @@ class ReporterAgent(BaseAgent):
         loop = self.tool_loop or AgentToolLoop(max_tool_rounds=3, max_tool_calls=4)
         payload = {
             "task": "Create concise report notes from existing AutoFlow state. Prefer memory/observation tools.",
+            "memory_pack": self.memory_builder.build(state, persisted_memory=state.get("agent_memory")),
             "counts": {
                 "assets": len(state.get("assets", [])),
                 "executed_tasks": len(state.get("executed_tasks", [])),

@@ -9,6 +9,7 @@ from redis.exceptions import RedisError
 
 from autoflow.graph.state import AutoFlowState
 from autoflow.memory.agent_memory import AgentMemoryBuilder
+from autoflow.memory.context import MemoryContextBuilder
 from autoflow.settings import settings
 
 
@@ -30,6 +31,7 @@ class RedisMemoryStore:
         self.ttl_seconds = settings.redis_ttl_seconds if ttl_seconds is None else ttl_seconds
         self._client = client
         self.memory_builder = AgentMemoryBuilder()
+        self.context_builder = MemoryContextBuilder(memory_builder=self.memory_builder)
 
     @classmethod
     def from_settings(cls) -> "RedisMemoryStore":
@@ -45,13 +47,15 @@ class RedisMemoryStore:
 
     def record_node_state(self, node: str, state: AutoFlowState) -> str | None:
         if not self.enabled:
+            self.refresh_state_memory(state)
             return None
         flow_id = self._flow_id(state)
         if not flow_id:
+            self.refresh_state_memory(state)
             return "missing flow_id"
         try:
             summary = self._state_summary(node, state)
-            memory_pack = self.memory_builder.build(state)
+            memory_pack = self.refresh_state_memory(state)
             self.set_json(self._key(flow_id, "latest_state"), summary)
             self.set_json(self._key(flow_id, "memory_pack"), memory_pack)
             self.append_event(
@@ -72,6 +76,40 @@ class RedisMemoryStore:
             return str(exc)
         except TypeError as exc:
             return f"serialization error: {exc}"
+
+    def hydrate_state_memory(self, state: AutoFlowState) -> str | None:
+        """Load persisted Redis memory into state before an agent runs."""
+
+        if not self.enabled:
+            self.refresh_state_memory(state)
+            return None
+        flow_id = self._flow_id(state)
+        if not flow_id:
+            self.refresh_state_memory(state)
+            return None
+        try:
+            persisted = self.get_memory_pack(flow_id)
+            self.refresh_state_memory(state, persisted_memory=persisted)
+            return None
+        except RedisError as exc:
+            self.refresh_state_memory(state)
+            return str(exc)
+        except TypeError as exc:
+            self.refresh_state_memory(state)
+            return f"serialization error: {exc}"
+
+    def refresh_state_memory(
+        self,
+        state: AutoFlowState,
+        persisted_memory: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Build the canonical memory pack and place it on the shared state."""
+
+        base_memory = persisted_memory or state.get("agent_memory")
+        memory_pack = self.memory_builder.build(state, persisted_memory=base_memory)
+        state["agent_memory"] = memory_pack
+        state["memory_context"] = self.context_builder.build(state, persisted_memory=memory_pack)
+        return memory_pack
 
     def append_event(self, flow_id: str, event: dict[str, Any]) -> None:
         payload = {
