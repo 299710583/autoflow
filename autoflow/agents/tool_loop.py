@@ -120,14 +120,30 @@ class AgentToolLoop:
                 ),
             }
         )
-        assistant_message = self.llm_client.chat_with_tools(
-            messages=messages,
-            tools=tool_schemas,
-            max_tokens=self.max_tokens,
-            tool_choice="none",
-        )
-        messages.append(self._assistant_message_for_history(assistant_message))
-        final = parse_json_object(assistant_message.get("content", ""))
+        final: dict[str, Any] | None = None
+        for _ in range(3):
+            assistant_message = self.llm_client.chat_with_tools(
+                messages=messages,
+                tools=tool_schemas,
+                max_tokens=self.max_tokens,
+                tool_choice="none",
+            )
+            messages.append(self._assistant_message_for_history(assistant_message))
+            try:
+                final = parse_json_object(assistant_message.get("content", ""))
+                break
+            except (json.JSONDecodeError, ValueError) as exc:
+                messages.append(
+                    {
+                        "role": "user",
+                        "content": (
+                            f"Your previous final response was not valid JSON: {exc}. "
+                            f"{final_repair_instruction} Return exactly one JSON object, no markdown."
+                        ),
+                    }
+                )
+        if final is None:
+            final = parse_json_object(messages[-2].get("content", ""))
         return ToolLoopResult(
             final=final,
             messages=messages,

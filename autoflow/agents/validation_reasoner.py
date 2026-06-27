@@ -9,6 +9,8 @@ from autoflow.graph.state import AutoFlowState
 from autoflow.memory.agent_memory import AgentMemoryBuilder
 
 
+VALIDATION_TOOL_PHASES = {"validation"}
+
 VALIDATION_REACT_SYSTEM_PROMPT = """You are AutoFlow's ValidationReAct reasoner for an authorized lab security assessment.
 Your job is to actively validate whether a candidate finding is confirmed, false positive, inconclusive, or needs more evidence.
 Use function/tool calls to collect evidence when the current context is insufficient. Tool calls execute only inside the Docker tool container or AutoFlow built-in tools.
@@ -44,7 +46,7 @@ class ValidationReActReasoner:
         tool_loop: AgentToolLoop | None = None,
         memory_builder: AgentMemoryBuilder | None = None,
     ) -> None:
-        self.tool_loop = tool_loop or AgentToolLoop(max_tool_rounds=5, max_tool_calls=8, max_tokens=4096)
+        self.tool_loop = tool_loop or AgentToolLoop(max_tool_rounds=5, max_tool_calls=8, max_tokens=1024)
         self.memory_builder = memory_builder or AgentMemoryBuilder()
 
     def reason(
@@ -86,6 +88,7 @@ class ValidationReActReasoner:
         return self._coerce_decision(result.final, result.tool_results, result.messages)
 
     def _run(self, payload: dict[str, Any], state: AutoFlowState):
+        payload = self._with_validation_tool_manifest(payload)
         return self.tool_loop.run(
             system_prompt=VALIDATION_REACT_SYSTEM_PROMPT,
             user_payload=payload,
@@ -94,6 +97,7 @@ class ValidationReActReasoner:
                 "Return a JSON object with decision, confidence, reasoning, impact, evidence, "
                 "missing_evidence, reproduction_steps, and next_actions."
             ),
+            tools=self._openai_tools_for_payload(payload),
         )
 
     def _payload(
@@ -153,6 +157,101 @@ class ValidationReActReasoner:
             },
         }
         return payload
+
+    def _with_validation_tool_manifest(self, payload: dict[str, Any]) -> dict[str, Any]:
+        enriched = dict(payload)
+        enriched["available_tool_manifest"] = self._prompt_manifest_for_payload(payload)
+        enriched["tool_execution_boundary"] = {
+            "containerized": True,
+            "container_image": "autoflow-kali-tools",
+            "host_shell_available_to_llm": False,
+            "tools_filtered_for": "validation",
+        }
+        return enriched
+
+    def _openai_tools_for_payload(self, payload: dict[str, Any]) -> list[dict[str, Any]]:
+        allowed = self._tool_names_for_payload(payload)
+        return [
+            function.openai_schema()
+            for function in self.tool_loop.catalog.functions(VALIDATION_TOOL_PHASES)
+            if function.name in allowed
+        ]
+
+    def _prompt_manifest_for_payload(self, payload: dict[str, Any]) -> list[dict[str, Any]]:
+        allowed = self._tool_names_for_payload(payload)
+        manifest: list[dict[str, Any]] = []
+        for function in self.tool_loop.catalog.functions(VALIDATION_TOOL_PHASES):
+            if function.name not in allowed:
+                continue
+            metadata = function.metadata
+            manifest.append(
+                {
+                    "function": function.name,
+                    "tool": metadata.get("tool"),
+                    "profile": metadata.get("profile"),
+                    "kind": metadata.get("kind"),
+                    "risk_level": metadata.get("risk_level"),
+                    "purpose": function.description[:500],
+                }
+            )
+        return manifest
+
+    def _tool_names_for_payload(self, payload: dict[str, Any]) -> set[str]:
+        finding = payload.get("finding") if isinstance(payload.get("finding"), dict) else {}
+        metadata = finding.get("metadata") if isinstance(finding.get("metadata"), dict) else {}
+        category = str(metadata.get("category") or "").lower()
+        text = " ".join(
+            str(value).lower()
+            for value in [
+                category,
+                finding.get("title", ""),
+                finding.get("description", ""),
+                finding.get("target", ""),
+            ]
+        )
+        base = {
+            "read_agent_memory",
+            "list_known_targets",
+            "search_observations",
+            "web_recon_fetch_page",
+            "run_curl__get",
+            "run_curl__get_with_headers",
+        }
+        if "cors" in text or "header" in text or "cache" in text:
+            return {
+                *base,
+                "run_script__cors_probe",
+                "run_script__security_headers_check",
+            }
+        if "api" in text or "/rest/" in text or "/api/" in text:
+            return {
+                *base,
+                "run_script__api_endpoint_probe",
+                "run_shell__bounded_bash",
+            }
+        if "debug" in text or "metrics" in text:
+            return {
+                *base,
+                "run_script__debug_endpoint_probe",
+                "run_shell__bounded_bash",
+            }
+        if "directory" in text or "listing" in text or "/ftp" in text:
+            return {
+                *base,
+                "run_script__directory_listing_probe",
+                "run_shell__bounded_bash",
+            }
+        if "config" in text or "package" in text or "secret" in text:
+            return {
+                *base,
+                "run_script__public_config_probe",
+                "run_shell__bounded_bash",
+            }
+        return {
+            *base,
+            "run_script__security_headers_check",
+            "run_nuclei__discovery_all_severity",
+        }
 
     def _coerce_decision(
         self,

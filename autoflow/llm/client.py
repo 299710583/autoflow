@@ -15,6 +15,8 @@ class LLMConfig:
     api_key: str
     base_url: str
     streaming: bool = True
+    timeout_seconds: float = 120.0
+    max_retries: int = 1
 
     @classmethod
     def from_settings(cls) -> "LLMConfig":
@@ -25,13 +27,20 @@ class LLMConfig:
             api_key=settings.llm_api_key,
             base_url=settings.llm_base_url,
             streaming=settings.llm_streaming,
+            timeout_seconds=settings.llm_timeout_seconds,
+            max_retries=settings.llm_max_retries,
         )
 
 
 class LLMClient:
     def __init__(self, config: LLMConfig | None = None) -> None:
         self.config = config or LLMConfig.from_settings()
-        self.client = OpenAI(api_key=self.config.api_key, base_url=self.config.base_url)
+        self.client = OpenAI(
+            api_key=self.config.api_key,
+            base_url=self.config.base_url,
+            timeout=self.config.timeout_seconds,
+            max_retries=self.config.max_retries,
+        )
 
     def complete(self, prompt: str, system: str | None = None, max_tokens: int = 512) -> str:
         messages = []

@@ -17,6 +17,25 @@ SCRIPT_TOOL_TEMPLATES = {
     "public_config_probe": "Fetch a public config-like file and classify secrets, endpoints, and version hints.",
 }
 
+VALIDATION_HELPER_PROFILES = {
+    ("curl", "headers"),
+    ("curl", "get"),
+    ("curl", "get_with_headers"),
+    ("nuclei", "discovery_all_severity"),
+    ("nuclei", "discovery_low"),
+    ("nuclei", "discovery_medium"),
+    ("nikto", "basic_web_check"),
+    ("whatweb", "web_fingerprint"),
+    ("httpx", "basic_probe"),
+    ("wafw00f", "detect_waf"),
+    ("script_runner", "security_headers_check"),
+    ("script_runner", "api_endpoint_probe"),
+    ("script_runner", "cors_probe"),
+    ("script_runner", "debug_endpoint_probe"),
+    ("script_runner", "directory_listing_probe"),
+    ("script_runner", "public_config_probe"),
+}
+
 
 @dataclass(frozen=True)
 class ToolFunction:
@@ -51,14 +70,16 @@ class ToolCatalog:
 
     def functions(self, phases: set[str] | None = None) -> list[ToolFunction]:
         functions: list[ToolFunction] = [
-            self._web_recon_tool(),
-            self._bounded_shell_tool(),
             self._read_agent_memory_tool(),
             self._list_known_targets_tool(),
             self._search_observations_tool(),
         ]
-        functions.extend(self._container_tool_functions())
-        functions.extend(self._script_tool_functions())
+        if self._phase_allows_builtin(phases, {"discovery", "validation"}):
+            functions.append(self._web_recon_tool())
+        if self._phase_allows_builtin(phases, {"validation", "artifact_audit"}):
+            functions.append(self._bounded_shell_tool())
+        functions.extend(self._container_tool_functions(phases))
+        functions.extend(self._script_tool_functions(phases))
         return functions
 
     def openai_tools(self, phases: set[str] | None = None) -> list[dict[str, Any]]:
@@ -67,12 +88,14 @@ class ToolCatalog:
     def function_names(self) -> set[str]:
         return {function.name for function in self.functions()}
 
-    def _container_tool_functions(self) -> list[ToolFunction]:
+    def _container_tool_functions(self, phases: set[str] | None = None) -> list[ToolFunction]:
         functions: list[ToolFunction] = []
         for tool_name, tool in sorted(self.registry.tools.items()):
             if not tool.enabled:
                 continue
             for profile_name, profile in sorted(tool.profiles.items()):
+                if not self._profile_allowed_for_phase(tool_name, profile_name, phases):
+                    continue
                 properties: dict[str, Any] = {}
                 required: list[str] = []
                 for arg in profile.allowed_args:
@@ -112,7 +135,7 @@ class ToolCatalog:
                 )
         return functions
 
-    def _script_tool_functions(self) -> list[ToolFunction]:
+    def _script_tool_functions(self, phases: set[str] | None = None) -> list[ToolFunction]:
         return [
             ToolFunction(
                 name=self.script_function_name(template),
@@ -136,7 +159,21 @@ class ToolCatalog:
                 },
             )
             for template, description in sorted(SCRIPT_TOOL_TEMPLATES.items())
+            if self._profile_allowed_for_phase("script_runner", template, phases)
         ]
+
+    def _profile_allowed_for_phase(self, tool_name: str, profile_name: str, phases: set[str] | None) -> bool:
+        if phases is None:
+            return True
+        if "validation" in phases and (tool_name, profile_name) in VALIDATION_HELPER_PROFILES:
+            return True
+        entries = self.manifest.by_profile(tool_name, profile_name)
+        if not entries:
+            return False
+        return any(str(entry.get("phase", "")) in phases for entry in entries)
+
+    def _phase_allows_builtin(self, phases: set[str] | None, allowed: set[str]) -> bool:
+        return phases is None or bool(phases & allowed)
 
     def _web_recon_tool(self) -> ToolFunction:
         return ToolFunction(
