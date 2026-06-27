@@ -5,6 +5,7 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 from autoflow.agents.base import BaseAgent
+from autoflow.agents.validation_reasoner import ValidationReasoningDecision, ValidationReActReasoner
 from autoflow.artifacts.store import ArtifactStore
 from autoflow.executor.execution_client import ExecutionClient
 from autoflow.executor.script_author import ScriptAuthor
@@ -29,6 +30,7 @@ from autoflow.graph.state import AutoFlowState
 from autoflow.observations.parser import ToolObservationParser
 from autoflow.policy.approval import ApprovalStatus, approval_store
 from autoflow.runtime.actions import action_fingerprint
+from autoflow.settings import settings
 
 
 TASK_TOOL_PROFILES = {
@@ -896,6 +898,30 @@ class ValidationExecutorAgent(ExecutorAgent):
     current_phase = "validation_execution"
     next_action_after_run = "strategy"
 
+    def __init__(
+        self,
+        execution_client: ExecutionClient | None = None,
+        artifact_store: ArtifactStore | None = None,
+        script_runner: ScriptRunner | None = None,
+        script_author: ScriptAuthor | None = None,
+        shell_runner: ShellRunner | None = None,
+        observation_parser: ToolObservationParser | None = None,
+        web_recon_client: WebReconClient | None = None,
+        validation_reasoner: ValidationReActReasoner | None = None,
+        use_validation_react: bool | None = None,
+    ) -> None:
+        super().__init__(
+            execution_client=execution_client,
+            artifact_store=artifact_store,
+            script_runner=script_runner,
+            script_author=script_author,
+            shell_runner=shell_runner,
+            observation_parser=observation_parser,
+            web_recon_client=web_recon_client,
+        )
+        self.validation_reasoner = validation_reasoner
+        self.use_validation_react = use_validation_react
+
     def _candidate_actions(self, state: AutoFlowState) -> list[dict]:
         actions = self._actions_from_validation_plans(state.get("validation_plans", []))
         executed_ids = {
@@ -1030,6 +1056,13 @@ class ValidationExecutorAgent(ExecutorAgent):
         return super()._requires_approval(candidate, state)
 
     async def run(self, state: AutoFlowState) -> AutoFlowState:
+        if self._should_use_agentic_validation(state):
+            validation_results = self._run_agentic_validation(state)
+            if validation_results:
+                self._record_validation_results(state, validation_results)
+            state["next_action"] = "strategy"
+            return state
+
         candidates = self._candidate_actions(state)
         before_ids = {
             item.get("action_id")
@@ -1053,25 +1086,234 @@ class ValidationExecutorAgent(ExecutorAgent):
             new_results,
             covered_actions,
         )
-        validation_results = self._build_validation_results(state.get("validation_plans", []), new_results)
+        validation_results = self._build_validation_results(state.get("validation_plans", []), new_results, state=state)
         if validation_results:
-            existing_results = list(state.get("validation_results", []))
-            state["validation_results"] = [*existing_results, *[item.model_dump(mode="json") for item in validation_results]]
-            self._apply_validation_results_to_findings(state, validation_results)
-            flow = state.get("flow")
-            if flow is not None:
-                for result in validation_results:
-                    flow.add_validation_result(result)
-                    flow.add_memory(
-                        MemoryItem(
-                            kind=MemoryKind.FINDING,
-                            content=f"Validation result for {result.finding_id}: {result.status.value}",
-                            source=self.name,
-                            references=result.executed_action_ids,
-                            metadata=result.model_dump(mode="json"),
-                        )
-                    )
+            self._record_validation_results(state, validation_results)
         return state
+
+    def _should_use_agentic_validation(self, state: AutoFlowState) -> bool:
+        if self.use_validation_react is not None:
+            return self.use_validation_react
+        rules = state.get("rules_of_engagement", {})
+        if isinstance(rules, dict) and "validation_react_agent_enabled" in rules:
+            return bool(rules["validation_react_agent_enabled"])
+        if isinstance(rules, dict) and "validation_react_enabled" in rules:
+            return bool(rules["validation_react_enabled"])
+        return bool(settings.llm_api_key)
+
+    def _run_agentic_validation(self, state: AutoFlowState) -> list[ValidationResult]:
+        state["current_phase"] = "validation_react"
+        candidates = self._react_validation_candidates(state)
+        budget = self._validation_react_budget(state)
+        if budget > 0:
+            candidates = candidates[:budget]
+
+        results: list[ValidationResult] = []
+        for candidate in candidates:
+            finding = candidate["finding"]
+            plan = candidate.get("plan") or {}
+            try:
+                reasoner = self.validation_reasoner or ValidationReActReasoner()
+                decision = reasoner.validate(
+                    state=state,
+                    finding=finding,
+                    plan=plan,
+                    previous_results=self._previous_validation_results_for_finding(state, str(finding.get("id", ""))),
+                )
+            except Exception as exc:
+                errors = list(state.get("validation_react_errors", []))
+                errors.append(
+                    {
+                        "validation_plan_id": plan.get("id"),
+                        "finding_id": finding.get("id"),
+                        "target": finding.get("target") or plan.get("target"),
+                        "error": str(exc),
+                    }
+                )
+                state["validation_react_errors"] = errors[-20:]
+                continue
+
+            result = self._validation_result_from_react_decision(finding=finding, plan=plan, decision=decision)
+            results.append(result)
+            self._record_react_decision(state, finding=finding, plan=plan, decision=decision)
+        return results
+
+    def _react_validation_candidates(self, state: AutoFlowState) -> list[dict]:
+        findings = [
+            finding
+            for finding in state.get("findings", [])
+            if self._should_validate_finding(state, finding)
+        ]
+        finding_by_id = {finding.get("id"): finding for finding in findings if finding.get("id")}
+        plans_by_finding: dict[str, dict] = {}
+        for plan in state.get("validation_plans", []):
+            finding_id = str(plan.get("finding_id") or "")
+            if finding_id and finding_id not in plans_by_finding:
+                plans_by_finding[finding_id] = plan
+
+        candidates: list[dict] = []
+        for finding in findings:
+            finding_id = str(finding.get("id") or "")
+            candidates.append({"finding": finding, "plan": plans_by_finding.get(finding_id, {})})
+
+        planned_without_finding = [
+            plan
+            for plan in state.get("validation_plans", [])
+            if plan.get("finding_id") and plan.get("finding_id") not in finding_by_id
+        ]
+        for plan in planned_without_finding:
+            finding = self._plan_finding(plan)
+            if finding and self._should_validate_finding(state, finding):
+                candidates.append({"finding": finding, "plan": plan})
+
+        return sorted(candidates, key=lambda item: self._react_candidate_priority(item), reverse=True)
+
+    def _should_validate_finding(self, state: AutoFlowState, finding: dict) -> bool:
+        if not isinstance(finding, dict):
+            return False
+        status = str(finding.get("status") or FindingStatus.CANDIDATE.value)
+        if status in {FindingStatus.VALIDATED.value, FindingStatus.EXPLOITABLE.value, FindingStatus.FALSE_POSITIVE.value}:
+            return bool(state.get("rules_of_engagement", {}).get("validation_revalidate_closed", False))
+        finding_id = str(finding.get("id") or "")
+        if not finding_id:
+            return False
+        previous = self._previous_validation_results_for_finding(state, finding_id)
+        if any(item.get("status") in {ValidationResultStatus.VALIDATED.value, ValidationResultStatus.FALSE_POSITIVE.value} for item in previous):
+            return bool(state.get("rules_of_engagement", {}).get("validation_revalidate_closed", False))
+        return True
+
+    def _react_candidate_priority(self, item: dict) -> tuple[int, int, str]:
+        finding = item.get("finding") if isinstance(item.get("finding"), dict) else {}
+        plan = item.get("plan") if isinstance(item.get("plan"), dict) else {}
+        category = self._finding_category(finding, plan)
+        severity = str(finding.get("severity") or plan.get("risk_level") or "medium")
+        return (self._category_priority(category), self._risk_priority(severity), str(finding.get("id") or ""))
+
+    def _validation_react_budget(self, state: AutoFlowState) -> int:
+        rules = state.get("rules_of_engagement", {})
+        raw_value = state.get("validation_react_finding_budget")
+        if raw_value is None and isinstance(rules, dict):
+            raw_value = rules.get("validation_react_finding_budget")
+        if raw_value is None:
+            raw_value = 3
+        try:
+            return max(0, int(raw_value))
+        except (TypeError, ValueError):
+            return 3
+
+    def _previous_validation_results_for_finding(self, state: AutoFlowState, finding_id: str) -> list[dict]:
+        return [
+            item
+            for item in state.get("validation_results", [])
+            if str(item.get("finding_id") or "") == finding_id
+        ]
+
+    def _validation_result_from_react_decision(
+        self,
+        *,
+        finding: dict,
+        plan: dict,
+        decision: ValidationReasoningDecision,
+    ) -> ValidationResult:
+        status = decision.decision
+        reasoning = decision.reasoning
+        if status == ValidationResultStatus.VALIDATED and not decision.tool_results:
+            status = ValidationResultStatus.INCONCLUSIVE
+            reasoning = (
+                f"{reasoning} " if reasoning else ""
+            ) + "ValidationReAct did not execute a tool call in this round, so confirmation is not accepted."
+        plan_id = str(plan.get("id") or "")
+        category = self._finding_category(finding, plan)
+        return ValidationResult(
+            finding_id=str(finding.get("id") or plan.get("finding_id") or ""),
+            validation_plan_id=plan_id,
+            status=status,
+            confidence=decision.confidence,
+            impact=decision.impact or self._impact_summary(status, category, plan),
+            reproduction_steps=decision.reproduction_steps,
+            evidence=self._dedupe_text([*self._string_list(finding.get("evidence")), *decision.evidence]),
+            executed_action_ids=self._tool_result_action_ids(decision.tool_results),
+            reasoning=reasoning,
+            metadata={
+                "category": category,
+                "decision_source": "validation_react_agent",
+                "react_decision": decision.raw,
+                "react_missing_evidence": decision.missing_evidence,
+                "react_next_actions": decision.next_actions,
+                "react_tool_results": self._compact_react_tool_results(decision.tool_results),
+                "react_message_count": len(decision.messages),
+                "target": finding.get("target") or plan.get("target"),
+            },
+        )
+
+    def _tool_result_action_ids(self, tool_results: list[dict]) -> list[str]:
+        action_ids: list[str] = []
+        for result in tool_results:
+            payload = result.get("result")
+            if isinstance(payload, dict) and payload.get("action_id"):
+                action_ids.append(str(payload["action_id"]))
+            if result.get("action_id"):
+                action_ids.append(str(result["action_id"]))
+        return self._dedupe_text(action_ids)
+
+    def _record_react_decision(
+        self,
+        state: AutoFlowState,
+        *,
+        finding: dict,
+        plan: dict,
+        decision: ValidationReasoningDecision,
+    ) -> None:
+        records = list(state.get("validation_react_results", []))
+        records.append(
+            {
+                "validation_plan_id": plan.get("id"),
+                "finding_id": finding.get("id") or plan.get("finding_id"),
+                "target": finding.get("target") or plan.get("target"),
+                "decision": decision.decision.value,
+                "confidence": decision.confidence.value,
+                "reasoning": decision.reasoning,
+                "evidence": decision.evidence,
+                "missing_evidence": decision.missing_evidence,
+                "next_actions": decision.next_actions,
+                "tool_results": self._compact_react_tool_results(decision.tool_results),
+            }
+        )
+        state["validation_react_results"] = records[-20:]
+        if decision.messages:
+            messages = list(state.get("validation_react_messages", []))
+            messages.append(
+                {
+                    "finding_id": finding.get("id") or plan.get("finding_id"),
+                    "validation_plan_id": plan.get("id"),
+                    "message_count": len(decision.messages),
+                    "messages": decision.messages[-20:],
+                }
+            )
+            state["validation_react_messages"] = messages[-10:]
+        if decision.next_actions:
+            next_actions = list(state.get("validation_next_actions", []))
+            next_actions.extend(decision.next_actions)
+            state["validation_next_actions"] = next_actions[-50:]
+
+    def _record_validation_results(self, state: AutoFlowState, validation_results: list[ValidationResult]) -> None:
+        existing_results = list(state.get("validation_results", []))
+        state["validation_results"] = [*existing_results, *[item.model_dump(mode="json") for item in validation_results]]
+        self._apply_validation_results_to_findings(state, validation_results)
+        flow = state.get("flow")
+        if flow is None:
+            return
+        for result in validation_results:
+            flow.add_validation_result(result)
+            flow.add_memory(
+                MemoryItem(
+                    kind=MemoryKind.FINDING,
+                    content=f"Validation result for {result.finding_id}: {result.status.value}",
+                    source=self.name,
+                    references=result.executed_action_ids,
+                    metadata=result.model_dump(mode="json"),
+                )
+            )
 
     def _mark_validation_plan_statuses(
         self,
@@ -1125,6 +1367,7 @@ class ValidationExecutorAgent(ExecutorAgent):
         self,
         validation_plans: list[dict],
         new_results: dict[str, dict],
+        state: AutoFlowState | None = None,
     ) -> list[ValidationResult]:
         results: list[ValidationResult] = []
         for plan in validation_plans:
@@ -1145,10 +1388,68 @@ class ValidationExecutorAgent(ExecutorAgent):
                 action_id = item.get("action_id")
                 if action_id and action_id not in new_results:
                     full_results.append(item)
-            results.append(self._evaluate_validation_plan(plan, full_results))
+            react_decision = self._reason_validation_plan(state, plan, full_results) if state is not None else None
+            results.append(self._evaluate_validation_plan(plan, full_results, react_decision=react_decision))
         return results
 
-    def _evaluate_validation_plan(self, plan: dict, action_results: list[dict]) -> ValidationResult:
+    def _reason_validation_plan(
+        self,
+        state: AutoFlowState | None,
+        plan: dict,
+        action_results: list[dict],
+    ) -> ValidationReasoningDecision | None:
+        if state is None or not self._should_use_validation_react(state):
+            return None
+        try:
+            reasoner = self.validation_reasoner or ValidationReActReasoner()
+            decision = reasoner.reason(state=state, plan=plan, action_results=action_results)
+        except Exception as exc:
+            errors = list(state.get("validation_react_errors", []))
+            errors.append(
+                {
+                    "validation_plan_id": plan.get("id"),
+                    "finding_id": plan.get("finding_id"),
+                    "error": str(exc),
+                }
+            )
+            state["validation_react_errors"] = errors[-20:]
+            return None
+
+        records = list(state.get("validation_react_results", []))
+        records.append(
+            {
+                "validation_plan_id": plan.get("id"),
+                "finding_id": plan.get("finding_id"),
+                "decision": decision.decision.value,
+                "confidence": decision.confidence.value,
+                "reasoning": decision.reasoning,
+                "evidence": decision.evidence,
+                "missing_evidence": decision.missing_evidence,
+                "next_actions": decision.next_actions,
+                "tool_results": self._compact_react_tool_results(decision.tool_results),
+            }
+        )
+        state["validation_react_results"] = records[-20:]
+        if decision.next_actions:
+            next_actions = list(state.get("validation_next_actions", []))
+            next_actions.extend(decision.next_actions)
+            state["validation_next_actions"] = next_actions[-50:]
+        return decision
+
+    def _should_use_validation_react(self, state: AutoFlowState) -> bool:
+        if self.use_validation_react is not None:
+            return self.use_validation_react
+        rules = state.get("rules_of_engagement", {})
+        if isinstance(rules, dict) and "validation_react_enabled" in rules:
+            return bool(rules["validation_react_enabled"])
+        return bool(settings.llm_api_key)
+
+    def _evaluate_validation_plan(
+        self,
+        plan: dict,
+        action_results: list[dict],
+        react_decision: ValidationReasoningDecision | None = None,
+    ) -> ValidationResult:
         finding = self._plan_finding(plan)
         category = self._finding_category(finding, plan)
         combined_text = self._combined_result_text(action_results)
@@ -1163,12 +1464,42 @@ class ValidationExecutorAgent(ExecutorAgent):
         )
         confidence = FindingConfidence.HIGH if status == ValidationResultStatus.VALIDATED and completed else FindingConfidence.MEDIUM
         reproduction_steps = self._reproduction_steps(plan, action_results)
+        metadata = {
+            "category": category,
+            "validation_plan_status": plan.get("status"),
+            "success_criteria": plan.get("success_criteria", []),
+            "failure_criteria": plan.get("failure_criteria", []),
+            "decision_source": "rule_fallback",
+        }
+        if react_decision is not None:
+            status = react_decision.decision
+            confidence = react_decision.confidence
+            if react_decision.reasoning:
+                reasoning = react_decision.reasoning
+            if react_decision.impact:
+                impact = react_decision.impact
+            else:
+                impact = self._impact_summary(status, category, plan)
+            if react_decision.reproduction_steps:
+                reproduction_steps = react_decision.reproduction_steps
+            evidence = self._dedupe_text([*evidence, *react_decision.evidence])
+            metadata.update(
+                {
+                    "decision_source": "validation_react",
+                    "react_decision": react_decision.raw,
+                    "react_missing_evidence": react_decision.missing_evidence,
+                    "react_next_actions": react_decision.next_actions,
+                    "react_tool_results": self._compact_react_tool_results(react_decision.tool_results),
+                }
+            )
+        else:
+            impact = self._impact_summary(status, category, plan)
         return ValidationResult(
             finding_id=str(plan.get("finding_id", "")),
             validation_plan_id=str(plan.get("id", "")),
             status=status,
             confidence=confidence,
-            impact=self._impact_summary(status, category, plan),
+            impact=impact,
             reproduction_steps=reproduction_steps,
             evidence=evidence,
             executed_action_ids=[
@@ -1177,12 +1508,7 @@ class ValidationExecutorAgent(ExecutorAgent):
                 if item.get("action_id")
             ],
             reasoning=reasoning,
-            metadata={
-                "category": category,
-                "validation_plan_status": plan.get("status"),
-                "success_criteria": plan.get("success_criteria", []),
-                "failure_criteria": plan.get("failure_criteria", []),
-            },
+            metadata=metadata,
         )
 
     def _classify_validation(
@@ -1229,6 +1555,22 @@ class ValidationExecutorAgent(ExecutorAgent):
         if completed_count:
             return ValidationResultStatus.INCONCLUSIVE, "Some validation actions completed, but failures or weak evidence prevent confirmation."
         return ValidationResultStatus.INCONCLUSIVE, "Validation did not produce completed evidence."
+
+    def _compact_react_tool_results(self, tool_results: list[dict]) -> list[dict]:
+        compact: list[dict] = []
+        for item in tool_results[-10:]:
+            compact.append(
+                {
+                    "ok": item.get("ok"),
+                    "tool_call": item.get("tool_call"),
+                    "action_id": item.get("action_id"),
+                    "artifact_id": item.get("artifact_id"),
+                    "summary": self._trim_evidence_output(item.get("summary", ""), max_chars=500),
+                    "error": self._trim_evidence_output(item.get("error", ""), max_chars=500),
+                    "observation": item.get("observation"),
+                }
+            )
+        return compact
 
     def _apply_validation_results_to_findings(
         self,
@@ -1342,3 +1684,8 @@ class ValidationExecutorAgent(ExecutorAgent):
             seen.add(item)
             result.append(item)
         return result
+
+    def _string_list(self, value: object) -> list[str]:
+        if not isinstance(value, list):
+            return []
+        return [str(item) for item in value if str(item).strip()]

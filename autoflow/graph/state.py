@@ -30,6 +30,11 @@ class AutoFlowState(TypedDict, total=False):
     max_rounds: int
     findings: list[dict]
     validation_plans: list[dict]
+    validation_results: list[dict]
+    validation_react_results: list[dict]
+    validation_react_errors: list[dict]
+    validation_react_messages: list[dict]
+    validation_next_actions: list[dict]
     test_plans: list[dict]
     evidences: list[dict]
     verification: dict

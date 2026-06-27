@@ -106,7 +106,14 @@ class ToolDispatcher:
         web_recon.append(result)
         state["web_recon"] = web_recon
         self._append_observation(state, executed_task)
-        return self._ok(name, target, self._compact_web_recon(result), executed_task.get("summary", "web_recon completed"))
+        return self._ok(
+            name,
+            target,
+            self._compact_web_recon(result),
+            executed_task.get("summary", "web_recon completed"),
+            action_id=executed_task.get("action_id"),
+            artifact_id=executed_task.get("artifact_id"),
+        )
 
     def _dispatch_script(self, name: str, arguments: dict[str, Any], state: AutoFlowState) -> dict[str, Any]:
         template = name.split("__", 1)[1]
@@ -143,7 +150,22 @@ class ToolDispatcher:
             artifact_type=ArtifactType.RAW_OUTPUT,
         )
         self._append_observation(state, executed_task)
-        return self._ok(name, target, self._json_or_text(stdout, stderr), summary) if succeeded else self._error(name, target, stderr)
+        if succeeded:
+            return self._ok(
+                name,
+                target,
+                self._json_or_text(stdout, stderr),
+                summary,
+                action_id=executed_task.get("action_id"),
+                artifact_id=executed_task.get("artifact_id"),
+            )
+        return self._error(
+            name,
+            target,
+            stderr,
+            action_id=executed_task.get("action_id"),
+            artifact_id=executed_task.get("artifact_id"),
+        )
 
     def _dispatch_shell(self, name: str, arguments: dict[str, Any], state: AutoFlowState) -> dict[str, Any]:
         target = canonical_target(str(arguments.get("target", "")))
@@ -180,7 +202,22 @@ class ToolDispatcher:
         )
         self._append_observation(state, executed_task)
         payload = {"stdout_excerpt": self._truncate(stdout), "stderr_excerpt": self._truncate(stderr, 1200)}
-        return self._ok(name, target, payload, summary) if result.succeeded else self._error(name, target, stderr or summary)
+        if result.succeeded:
+            return self._ok(
+                name,
+                target,
+                payload,
+                summary,
+                action_id=executed_task.get("action_id"),
+                artifact_id=executed_task.get("artifact_id"),
+            )
+        return self._error(
+            name,
+            target,
+            stderr or summary,
+            action_id=executed_task.get("action_id"),
+            artifact_id=executed_task.get("artifact_id"),
+        )
 
     def _dispatch_container_tool(self, name: str, arguments: dict[str, Any], state: AutoFlowState) -> dict[str, Any]:
         raw = name.removeprefix("run_")
@@ -235,7 +272,22 @@ class ToolDispatcher:
             "stderr_excerpt": self._truncate(stderr, 1200),
             "signals": state.get("tool_observations", [])[-1].get("signals", []) if state.get("tool_observations") else [],
         }
-        return self._ok(name, target, payload, summary) if result.succeeded else self._error(name, target, stderr or summary)
+        if result.succeeded:
+            return self._ok(
+                name,
+                target,
+                payload,
+                summary,
+                action_id=executed_task.get("action_id"),
+                artifact_id=executed_task.get("artifact_id"),
+            )
+        return self._error(
+            name,
+            target,
+            stderr or summary,
+            action_id=executed_task.get("action_id"),
+            artifact_id=executed_task.get("artifact_id"),
+        )
 
     def _prepare_container_tool_args(
         self,
@@ -398,7 +450,7 @@ class ToolDispatcher:
             "artifact_id": artifact.id,
             "summary": summary if succeeded else "",
             "error": "" if succeeded else stderr,
-            "stdout": stdout,
+            "stdout": stdout,      
             "stderr": stderr,
         }
         executed_tasks = list(state.get("executed_tasks", []))
@@ -460,11 +512,36 @@ class ToolDispatcher:
                 targets.add(canonical_target(str(value)))
         return {target for target in targets if target}
 
-    def _ok(self, name: str, target: str, result: Any, summary: str) -> dict[str, Any]:
-        return {"ok": True, "tool_call": name, "target": target, "summary": summary, "result": result}
+    def _ok(
+        self,
+        name: str,
+        target: str,
+        result: Any,
+        summary: str,
+        action_id: str | None = None,
+        artifact_id: str | None = None,
+    ) -> dict[str, Any]:
+        payload = {"ok": True, "tool_call": name, "target": target, "summary": summary, "result": result}
+        if action_id:
+            payload["action_id"] = action_id
+        if artifact_id:
+            payload["artifact_id"] = artifact_id
+        return payload
 
-    def _error(self, name: str, target: str, error: str) -> dict[str, Any]:
-        return {"ok": False, "tool_call": name, "target": target, "error": self._truncate(error, 1200)}
+    def _error(
+        self,
+        name: str,
+        target: str,
+        error: str,
+        action_id: str | None = None,
+        artifact_id: str | None = None,
+    ) -> dict[str, Any]:
+        payload = {"ok": False, "tool_call": name, "target": target, "error": self._truncate(error, 1200)}
+        if action_id:
+            payload["action_id"] = action_id
+        if artifact_id:
+            payload["artifact_id"] = artifact_id
+        return payload
 
     def _compact_web_recon(self, result: dict[str, Any]) -> dict[str, Any]:
         return {
