@@ -83,6 +83,7 @@ from autoflow.tools.manifest import ToolManifestRegistry
 
 WEB_LIKE_SERVICES = {"http", "https", "http-alt", "nessus"}
 WEB_LIKE_PORTS = {80, 443, 3000, 3001, 5000, 8000, 8080, 8443, 8834}
+DISCOVERY_TOOL_PHASES = {"discovery"}
 
 
 DISCOVERY_REASONER_SYSTEM_PROMPT = """You are AutoFlow's DiscoveryReasonerAgent for an authorized security assessment.
@@ -129,10 +130,15 @@ class DiscoveryReasonerAgent(BaseAgent):
         findings = state.get("findings", [])
 
         if self._should_use_llm():
-            if self.use_tool_calling:
-                attack_surfaces, test_plans = self._reason_with_tool_loop(state, assets, web_recon, findings)
-            else:
-                attack_surfaces, test_plans = self._reason_with_llm(state, assets, web_recon, findings)
+            try:
+                if self.use_tool_calling:
+                    attack_surfaces, test_plans = self._reason_with_tool_loop(state, assets, web_recon, findings)
+                else:
+                    attack_surfaces, test_plans = self._reason_with_llm(state, assets, web_recon, findings)
+            except Exception as exc:
+                self._record_reasoning_error(state, exc)
+                attack_surfaces = self._analyze_attack_surfaces_by_rules(assets, web_recon)
+                test_plans = self._generate_test_plans_by_rules(state, attack_surfaces, web_recon, findings)
             state["attack_surfaces"] = [surface.model_dump(mode="json") for surface in attack_surfaces]
             state["agent_memory"] = self.memory_builder.build(state, persisted_memory=state.get("agent_memory"))
             state["memory_context"] = self.context_builder.build(state, persisted_memory=state["agent_memory"])
@@ -191,15 +197,26 @@ class DiscoveryReasonerAgent(BaseAgent):
         findings: list[dict],
     ) -> tuple[list[AttackSurface], list[TestPlan]]:
         memory = self.memory_builder.build(state, persisted_memory=state.get("agent_memory"))
-        loop = self.tool_loop or AgentToolLoop(llm_client=self.llm_client)
-        tool_manifest = self.tool_manifest.prompt_manifest("discovery")
+        loop = self.tool_loop or AgentToolLoop(
+            llm_client=self.llm_client,
+            max_tool_rounds=3,
+            max_tool_calls=5,
+            max_tokens=1024,
+        )
         payload = {
-            "task": "Use function calling tools when more evidence is needed, then produce discovery reasoning output.",
-            "memory": memory,
-            "legacy_tool_manifest": tool_manifest,
-            "assets": assets,
-            "web_recon": web_recon,
-            "findings": findings,
+            "task": "Produce compact discovery reasoning. Call tools only when current recon is insufficient.",
+            "memory": self._compact_memory(memory),
+            "available_tool_manifest": self._discovery_tool_manifest(loop),
+            "tool_execution_boundary": {
+                "containerized": True,
+                "container_image": "autoflow-kali-tools",
+                "host_shell_available_to_llm": False,
+                "tools_filtered_for": "discovery",
+            },
+            "assets": self._compact_assets(assets),
+            "web_recon": self._compact_web_recon(web_recon),
+            "findings": self._compact_findings(findings),
+            "tool_observations": self._compact_tool_observations(state.get("tool_observations", [])),
             "known_targets": sorted(self._allowed_targets_from_state(state)),
             "rules": {
                 "authorized_assessment": True,
@@ -207,6 +224,13 @@ class DiscoveryReasonerAgent(BaseAgent):
                 "use_tools_before_final_when_helpful": True,
                 "targets_must_remain_authorized_or_discovered": True,
                 "final_response_must_be_json": True,
+            },
+            "required_final_fields": ["attack_surfaces", "test_plans"],
+            "json_contract": {
+                "required_top_level_fields": ["attack_surfaces", "test_plans"],
+                "return_only_json_object": True,
+                "no_markdown": True,
+                "arrays_may_be_empty": True,
             },
             "final_output_schema": {
                 "attack_surfaces": [
@@ -254,6 +278,7 @@ class DiscoveryReasonerAgent(BaseAgent):
                 "Return a JSON object with attack_surfaces and test_plans arrays. "
                 "Do not include exploit, brute force, persistence, destructive, or out-of-scope actions."
             ),
+            tools=loop.catalog.openai_tools(DISCOVERY_TOOL_PHASES),
         )
         state["tool_loop_messages"] = result.messages
         state["tool_loop_results"] = result.tool_results
@@ -266,6 +291,176 @@ class DiscoveryReasonerAgent(BaseAgent):
         if not isinstance(plan_items, list):
             plan_items = []
         return attack_surfaces, self._coerce_plans(plan_items, state, attack_surfaces)
+
+    def _record_reasoning_error(self, state: AutoFlowState, exc: Exception) -> None:
+        errors = list(state.get("discovery_reasoner_errors", []))
+        errors.append(
+            {
+                "phase": "discovery_reasoning",
+                "error": str(exc),
+                "fallback": "rule_based_discovery",
+            }
+        )
+        state["discovery_reasoner_errors"] = errors[-10:]
+
+    def _discovery_tool_manifest(self, loop: AgentToolLoop) -> list[dict[str, Any]]:
+        manifest: list[dict[str, Any]] = []
+        for function in loop.catalog.functions(DISCOVERY_TOOL_PHASES):
+            metadata = function.metadata
+            manifest.append(
+                {
+                    "function": function.name,
+                    "tool": metadata.get("tool"),
+                    "profile": metadata.get("profile"),
+                    "kind": metadata.get("kind"),
+                    "risk_level": metadata.get("risk_level"),
+                    "purpose": self._truncate(function.description, 420),
+                }
+            )
+        return manifest
+
+    def _compact_memory(self, memory: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "target_scope": memory.get("target_scope", [])[:20],
+            "assets": self._compact_assets(memory.get("assets", [])),
+            "web_context": self._compact_web_recon(memory.get("web_context", [])),
+            "attack_surfaces": [
+                {
+                    "target": item.get("target"),
+                    "surface_type": item.get("surface_type"),
+                    "technology": item.get("technology", ""),
+                    "entrypoints": item.get("entrypoints", [])[:20],
+                }
+                for item in memory.get("attack_surfaces", [])[-20:]
+                if isinstance(item, dict)
+            ],
+            "findings": self._compact_findings(memory.get("findings", [])),
+            "validation_results": [
+                {
+                    "finding_id": item.get("finding_id"),
+                    "status": item.get("status"),
+                    "confidence": item.get("confidence"),
+                    "reasoning": self._truncate(item.get("reasoning", ""), 500),
+                }
+                for item in memory.get("validation_results", [])[-20:]
+                if isinstance(item, dict)
+            ],
+            "tool_observations": self._compact_tool_observations(memory.get("tool_observations", [])),
+        }
+
+    def _compact_assets(self, assets: list[dict]) -> list[dict]:
+        compact = []
+        for asset in assets[-30:]:
+            if not isinstance(asset, dict):
+                continue
+            compact.append(
+                {
+                    "ip": asset.get("ip"),
+                    "hostnames": asset.get("hostnames", [])[:10],
+                    "ports": [
+                        {
+                            "port": port.get("port"),
+                            "protocol": port.get("protocol"),
+                            "state": port.get("state"),
+                            "service": port.get("service"),
+                            "product": port.get("product", ""),
+                            "version": port.get("version", ""),
+                        }
+                        for port in asset.get("ports", [])[:30]
+                        if isinstance(port, dict)
+                    ],
+                }
+            )
+        return compact
+
+    def _compact_web_recon(self, web_recon: list[dict]) -> list[dict]:
+        compact = []
+        for item in web_recon[-30:]:
+            if not isinstance(item, dict):
+                continue
+            robots = item.get("robots") if isinstance(item.get("robots"), dict) else {}
+            compact.append(
+                {
+                    "target": canonical_target(str(item.get("target", ""))),
+                    "status_code": item.get("status_code"),
+                    "title": item.get("title"),
+                    "links": [canonical_target(str(value)) for value in item.get("links", [])[:40]],
+                    "forms": [
+                        {
+                            "action": canonical_target(str(form.get("action", ""))),
+                            "method": form.get("method", ""),
+                            "inputs": len(form.get("inputs", [])),
+                        }
+                        for form in item.get("forms", [])[:10]
+                        if isinstance(form, dict)
+                    ],
+                    "scripts": item.get("scripts", [])[:20],
+                    "interesting_paths": [
+                        canonical_target(str(value))
+                        for value in item.get("interesting_paths", [])[:40]
+                    ],
+                    "robots_interesting_paths": [
+                        canonical_target(str(value))
+                        for value in robots.get("interesting_paths", [])[:40]
+                    ],
+                    "error": item.get("error", ""),
+                }
+            )
+        return compact
+
+    def _compact_findings(self, findings: list[dict]) -> list[dict]:
+        compact = []
+        for item in findings[-40:]:
+            if not isinstance(item, dict):
+                continue
+            metadata = item.get("metadata") if isinstance(item.get("metadata"), dict) else {}
+            compact.append(
+                {
+                    "id": item.get("id"),
+                    "title": item.get("title"),
+                    "status": item.get("status"),
+                    "severity": item.get("severity"),
+                    "confidence": item.get("confidence"),
+                    "target": canonical_target(str(item.get("target", ""))),
+                    "category": metadata.get("category"),
+                    "evidence": [self._truncate(str(value), 500) for value in item.get("evidence", [])[:5]],
+                    "source": item.get("source", ""),
+                }
+            )
+        return compact
+
+    def _compact_tool_observations(self, observations: list[dict]) -> list[dict]:
+        compact = []
+        for item in observations[-40:]:
+            if not isinstance(item, dict):
+                continue
+            compact.append(
+                {
+                    "tool": item.get("tool"),
+                    "profile": item.get("profile"),
+                    "target": canonical_target(str(item.get("target", ""))),
+                    "status": item.get("status"),
+                    "summary": self._truncate(item.get("summary", ""), 500),
+                    "signals": [
+                        {
+                            "kind": signal.get("kind"),
+                            "name": signal.get("name"),
+                            "severity": signal.get("severity"),
+                            "target": canonical_target(str(signal.get("target", ""))),
+                            "evidence": self._truncate(signal.get("evidence", ""), 400),
+                        }
+                        for signal in item.get("signals", [])[:12]
+                        if isinstance(signal, dict)
+                    ],
+                }
+            )
+        return compact
+
+    def _truncate(self, value: object, limit: int) -> str:
+        text = str(value or "")
+        if len(text) <= limit:
+            return text
+        return text[: limit - 15] + "...[truncated]"
 
     def _reason_with_llm(
         self,
@@ -281,10 +476,10 @@ class DiscoveryReasonerAgent(BaseAgent):
 
         surface_prompt = {
             "step": "attack_surface_analysis",
-            "memory": memory,
+            "memory": self._compact_memory(memory),
             "tool_manifest": tool_manifest,
-            "assets": assets,
-            "web_recon": web_recon,
+            "assets": self._compact_assets(assets),
+            "web_recon": self._compact_web_recon(web_recon),
             "allowed_surface_types": ["web_application", "network_service", "api", "static_content", "unknown"],
             "output_schema": {
                 "attack_surfaces": [
@@ -304,7 +499,7 @@ class DiscoveryReasonerAgent(BaseAgent):
         surface_content, surface_response = self._complete_json_in_context(
             client=client,
             messages=messages,
-            max_tokens=2048,
+            max_tokens=1024,
             repair_instruction="Return only a valid JSON object with an attack_surfaces array.",
         )
         messages.append({"role": "assistant", "content": surface_content})
@@ -316,14 +511,14 @@ class DiscoveryReasonerAgent(BaseAgent):
         testplan_prompt = {
             "step": "test_plan_generation",
             "memory": {
-                **memory,
+                **self._compact_memory(memory),
                 "attack_surfaces": [surface.model_dump(mode="json") for surface in attack_surfaces],
             },
             "tool_manifest": tool_manifest,
             "attack_surfaces": [surface.model_dump(mode="json") for surface in attack_surfaces],
-            "web_recon": web_recon,
-            "findings": findings,
-            "tool_observations": state.get("tool_observations", []),
+            "web_recon": self._compact_web_recon(web_recon),
+            "findings": self._compact_findings(findings),
+            "tool_observations": self._compact_tool_observations(state.get("tool_observations", [])),
             "output_schema": {
                 "test_plans": [
                     {
@@ -355,7 +550,7 @@ class DiscoveryReasonerAgent(BaseAgent):
         _testplan_content, testplan_response = self._complete_json_in_context(
             client=client,
             messages=messages,
-            max_tokens=4096,
+            max_tokens=1024,
             repair_instruction="Return only a valid JSON object with a test_plans array.",
         )
         items = testplan_response.get("test_plans", [])

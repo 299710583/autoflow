@@ -104,8 +104,10 @@ def limit_auto_actions(state: dict, limit: int) -> None:
 def limit_validation_actions(state: dict, limit: int) -> None:
     if limit <= 0:
         state.pop("validation_action_budget", None)
+        state.pop("validation_react_finding_budget", None)
         return
     state["validation_action_budget"] = limit
+    state["validation_react_finding_budget"] = limit
 
 
 async def run() -> dict:

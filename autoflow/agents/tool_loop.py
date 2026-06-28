@@ -96,18 +96,13 @@ class AgentToolLoop:
                 continue
 
             content = assistant_message.get("content", "")
-            try:
-                final = parse_json_object(content)
-            except (json.JSONDecodeError, ValueError) as exc:
-                messages.append(
-                    {
-                        "role": "user",
-                        "content": (
-                            f"Your previous response was not valid final JSON: {exc}. "
-                            f"{final_repair_instruction} Return exactly one JSON object, no markdown."
-                        ),
-                    }
-                )
+            final, repair_message = self._parse_final_or_repair_message(
+                content=content,
+                user_payload=user_payload,
+                final_repair_instruction=final_repair_instruction,
+            )
+            if repair_message:
+                messages.append({"role": "user", "content": repair_message})
                 continue
             return ToolLoopResult(final=final, messages=messages, tool_results=tool_results, iterations=iteration)
 
@@ -129,17 +124,20 @@ class AgentToolLoop:
                 tool_choice="none",
             )
             messages.append(self._assistant_message_for_history(assistant_message))
-            try:
-                final = parse_json_object(assistant_message.get("content", ""))
+            candidate, repair_message = self._parse_final_or_repair_message(
+                content=assistant_message.get("content", ""),
+                user_payload=user_payload,
+                final_repair_instruction=final_repair_instruction,
+                final_attempt=True,
+            )
+            if candidate is not None:
+                final = candidate
                 break
-            except (json.JSONDecodeError, ValueError) as exc:
+            if repair_message:
                 messages.append(
                     {
                         "role": "user",
-                        "content": (
-                            f"Your previous final response was not valid JSON: {exc}. "
-                            f"{final_repair_instruction} Return exactly one JSON object, no markdown."
-                        ),
+                        "content": repair_message,
                     }
                 )
         if final is None:
@@ -172,6 +170,116 @@ class AgentToolLoop:
                 "raw_arguments": raw_arguments,
             }
         return self.dispatcher.dispatch(name, arguments, state)
+
+    def _parse_final_or_repair_message(
+        self,
+        *,
+        content: str,
+        user_payload: dict[str, Any],
+        final_repair_instruction: str,
+        final_attempt: bool = False,
+    ) -> tuple[dict[str, Any] | None, str | None]:
+        try:
+            final = parse_json_object(content)
+        except (json.JSONDecodeError, ValueError) as exc:
+            return None, self._json_repair_message(
+                content=content,
+                exc=exc,
+                user_payload=user_payload,
+                final_repair_instruction=final_repair_instruction,
+                final_attempt=final_attempt,
+            )
+
+        missing_fields = self._missing_required_fields(final, user_payload)
+        if missing_fields:
+            return None, self._missing_fields_repair_message(
+                missing_fields=missing_fields,
+                user_payload=user_payload,
+                final_repair_instruction=final_repair_instruction,
+            )
+        return final, None
+
+    def _json_repair_message(
+        self,
+        *,
+        content: str,
+        exc: Exception,
+        user_payload: dict[str, Any],
+        final_repair_instruction: str,
+        final_attempt: bool,
+    ) -> str:
+        prefix = "Your previous final response was not valid JSON." if final_attempt else (
+            "Your previous response was not valid final JSON."
+        )
+        return (
+            f"{prefix}\n"
+            f"Parser error: {exc}\n"
+            f"{self._json_error_excerpt(content, exc)}\n"
+            f"{self._final_json_contract(user_payload)}\n"
+            f"{final_repair_instruction}\n"
+            "Return exactly one valid JSON object. Do not include markdown fences, comments, trailing commas, "
+            "analysis text, apologies, or explanations."
+        )
+
+    def _missing_fields_repair_message(
+        self,
+        *,
+        missing_fields: list[str],
+        user_payload: dict[str, Any],
+        final_repair_instruction: str,
+    ) -> str:
+        return (
+            "Your previous response was valid JSON, but it did not satisfy the required final schema.\n"
+            f"Missing required top-level fields: {', '.join(missing_fields)}\n"
+            f"{self._final_json_contract(user_payload)}\n"
+            f"{final_repair_instruction}\n"
+            "Return a corrected complete JSON object only. Keep arrays empty if there is no item to report."
+        )
+
+    def _missing_required_fields(self, final: dict[str, Any], user_payload: dict[str, Any]) -> list[str]:
+        required_fields = self._required_final_fields(user_payload)
+        return [field for field in required_fields if field not in final or final[field] is None]
+
+    def _required_final_fields(self, user_payload: dict[str, Any]) -> list[str]:
+        fields = user_payload.get("required_final_fields")
+        if fields is None:
+            contract = user_payload.get("json_contract")
+            if isinstance(contract, dict):
+                fields = contract.get("required_top_level_fields")
+        if not isinstance(fields, list):
+            return []
+        return [str(field) for field in fields if str(field).strip()]
+
+    def _final_json_contract(self, user_payload: dict[str, Any]) -> str:
+        contract = {
+            "required_top_level_fields": self._required_final_fields(user_payload),
+            "json_contract": user_payload.get("json_contract", {}),
+            "final_output_schema": user_payload.get("final_output_schema", {}),
+        }
+        serialized = json.dumps(contract, ensure_ascii=False, indent=2)
+        if len(serialized) > 5000:
+            serialized = serialized[:4997] + "..."
+        return f"Required final JSON contract:\n{serialized}"
+
+    def _json_error_excerpt(self, content: str, exc: Exception) -> str:
+        text = content or ""
+        if not text.strip():
+            return "Response excerpt: <empty response>"
+        if isinstance(exc, json.JSONDecodeError):
+            window = 180
+            pos = min(max(exc.pos, 0), len(text))
+            start = max(0, pos - window)
+            end = min(len(text), pos + window)
+            excerpt = text[start:end]
+            pointer = " " * max(0, pos - start) + "^"
+            return (
+                f"Error location: line {exc.lineno}, column {exc.colno}, char {exc.pos}\n"
+                f"Nearby response excerpt:\n{excerpt}\n{pointer}"
+            )
+        head = text[:600]
+        if len(text) > 600:
+            head += "..."
+        return f"Response excerpt:\n{head}"
 
     def _assistant_message_for_history(self, message: dict[str, Any]) -> dict[str, Any]:
         history = {"role": "assistant", "content": message.get("content", "")}
