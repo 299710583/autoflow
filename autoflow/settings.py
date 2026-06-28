@@ -27,6 +27,8 @@ class Settings(BaseSettings):
     llm_streaming: bool = True
     llm_timeout_seconds: float = 120.0
     llm_max_retries: int = 1
+    llm_disable_thinking: bool = False
+    llm_disable_thinking_for_json: bool = True
 
 
 settings = Settings()

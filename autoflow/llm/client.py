@@ -17,6 +17,8 @@ class LLMConfig:
     streaming: bool = True
     timeout_seconds: float = 120.0
     max_retries: int = 1
+    disable_thinking: bool = False
+    disable_thinking_for_json: bool = True
 
     @classmethod
     def from_settings(cls) -> "LLMConfig":
@@ -29,6 +31,8 @@ class LLMConfig:
             streaming=settings.llm_streaming,
             timeout_seconds=settings.llm_timeout_seconds,
             max_retries=settings.llm_max_retries,
+            disable_thinking=settings.llm_disable_thinking,
+            disable_thinking_for_json=settings.llm_disable_thinking_for_json,
         )
 
 
@@ -42,19 +46,46 @@ class LLMClient:
             max_retries=self.config.max_retries,
         )
 
-    def complete(self, prompt: str, system: str | None = None, max_tokens: int = 512) -> str:
+    def complete(
+        self,
+        prompt: str,
+        system: str | None = None,
+        max_tokens: int = 512,
+        response_format_json: bool = False,
+        disable_thinking: bool | None = None,
+    ) -> str:
         messages = []
         if system:
             messages.append({"role": "system", "content": system})
         messages.append({"role": "user", "content": prompt})
-        return self.complete_messages(messages, max_tokens=max_tokens)
-
-    def complete_messages(self, messages: list[dict[str, str]], max_tokens: int = 512) -> str:
-        response = self.client.chat.completions.create(
-            model=self.config.model,
-            messages=messages,
+        return self.complete_messages(
+            messages,
             max_tokens=max_tokens,
+            response_format_json=response_format_json,
+            disable_thinking=disable_thinking,
         )
+
+    def complete_messages(
+        self,
+        messages: list[dict[str, str]],
+        max_tokens: int = 512,
+        response_format_json: bool = False,
+        disable_thinking: bool | None = None,
+    ) -> str:
+        request: dict[str, Any] = {
+            "model": self.config.model,
+            "messages": messages,
+            "max_tokens": max_tokens,
+        }
+        if response_format_json:
+            request["response_format"] = {"type": "json_object"}
+        extra_body = self._extra_body(
+            response_format_json=response_format_json,
+            disable_thinking=disable_thinking,
+        )
+        if extra_body:
+            request["extra_body"] = extra_body
+        response = self.client.chat.completions.create(**request)
         content = response.choices[0].message.content
         return content or ""
 
@@ -64,14 +95,25 @@ class LLMClient:
         tools: list[dict[str, Any]],
         max_tokens: int = 1024,
         tool_choice: str | dict[str, Any] = "auto",
+        response_format_json: bool = False,
+        disable_thinking: bool | None = None,
     ) -> dict[str, Any]:
-        response = self.client.chat.completions.create(
-            model=self.config.model,
-            messages=messages,
-            tools=tools,
-            tool_choice=tool_choice,
-            max_tokens=max_tokens,
+        request: dict[str, Any] = {
+            "model": self.config.model,
+            "messages": messages,
+            "tools": tools,
+            "tool_choice": tool_choice,
+            "max_tokens": max_tokens,
+        }
+        if response_format_json:
+            request["response_format"] = {"type": "json_object"}
+        extra_body = self._extra_body(
+            response_format_json=response_format_json,
+            disable_thinking=disable_thinking,
         )
+        if extra_body:
+            request["extra_body"] = extra_body
+        response = self.client.chat.completions.create(**request)
         message = response.choices[0].message
         tool_calls = []
         for call in message.tool_calls or []:
@@ -93,7 +135,7 @@ class LLMClient:
         }
 
     def ping(self) -> str:
-        return self.complete("Reply with exactly: ok", max_tokens=10).strip()
+        return self.complete("Reply with exactly: ok", max_tokens=10, disable_thinking=True).strip()
 
     def complete_json(
         self,
@@ -101,7 +143,12 @@ class LLMClient:
         system: str | None = None,
         max_tokens: int = 1024,
     ) -> dict[str, Any]:
-        content = self.complete(prompt=prompt, system=system, max_tokens=max_tokens)
+        content = self.complete(
+            prompt=prompt,
+            system=system,
+            max_tokens=max_tokens,
+            response_format_json=True,
+        )
         return parse_json_object(content)
 
     def complete_json_messages(
@@ -109,8 +156,32 @@ class LLMClient:
         messages: list[dict[str, str]],
         max_tokens: int = 1024,
     ) -> dict[str, Any]:
-        content = self.complete_messages(messages=messages, max_tokens=max_tokens)
+        content = self.complete_messages(
+            messages=messages,
+            max_tokens=max_tokens,
+            response_format_json=True,
+        )
         return parse_json_object(content)
+
+    def _extra_body(
+        self,
+        *,
+        response_format_json: bool = False,
+        disable_thinking: bool | None = None,
+    ) -> dict[str, Any]:
+        if disable_thinking is None:
+            disable_thinking = (
+                self.config.disable_thinking_for_json if response_format_json else self.config.disable_thinking
+            )
+        if not disable_thinking:
+            return {}
+        base_url = self.config.base_url.lower()
+        model = self.config.model.lower()
+        if "deepseek" not in base_url:
+            return {}
+        if not model.startswith("deepseek-v4"):
+            return {}
+        return {"thinking": {"type": "disabled"}}
 
 
 def parse_json_object(content: str) -> dict[str, Any]:

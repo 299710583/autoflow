@@ -54,16 +54,21 @@ class AgentToolLoop:
         tool_schemas = tools or self.catalog.openai_tools()
         tool_results: list[dict[str, Any]] = []
         tool_call_count = 0
+        final_json_mode = False
 
         for iteration in range(1, self.max_tool_rounds + 1):
             assistant_message = self.llm_client.chat_with_tools(
                 messages=messages,
                 tools=tool_schemas,
                 max_tokens=self.max_tokens,
+                tool_choice="none" if final_json_mode else "auto",
+                response_format_json=final_json_mode,
+                disable_thinking=True if final_json_mode else None,
             )
             messages.append(self._assistant_message_for_history(assistant_message))
             tool_calls = assistant_message.get("tool_calls") or []
             if tool_calls:
+                final_json_mode = False
                 for call in tool_calls:
                     if tool_call_count >= self.max_tool_calls:
                         messages.append(
@@ -103,6 +108,7 @@ class AgentToolLoop:
             )
             if repair_message:
                 messages.append({"role": "user", "content": repair_message})
+                final_json_mode = True
                 continue
             return ToolLoopResult(final=final, messages=messages, tool_results=tool_results, iterations=iteration)
 
@@ -122,6 +128,8 @@ class AgentToolLoop:
                 tools=tool_schemas,
                 max_tokens=self.max_tokens,
                 tool_choice="none",
+                response_format_json=True,
+                disable_thinking=True,
             )
             messages.append(self._assistant_message_for_history(assistant_message))
             candidate, repair_message = self._parse_final_or_repair_message(

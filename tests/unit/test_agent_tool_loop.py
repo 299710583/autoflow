@@ -9,9 +9,25 @@ from autoflow.agents.tool_loop import AgentToolLoop
 class FakeToolLLM:
     def __init__(self) -> None:
         self.calls: list[list[dict]] = []
+        self.call_options: list[dict] = []
 
-    def chat_with_tools(self, messages, tools, max_tokens=1024, tool_choice="auto"):
+    def chat_with_tools(
+        self,
+        messages,
+        tools,
+        max_tokens=1024,
+        tool_choice="auto",
+        response_format_json=False,
+        disable_thinking=None,
+    ):
         self.calls.append([dict(message) for message in messages])
+        self.call_options.append(
+            {
+                "tool_choice": tool_choice,
+                "response_format_json": response_format_json,
+                "disable_thinking": disable_thinking,
+            }
+        )
         if len(self.calls) == 1:
             return {
                 "role": "assistant",
@@ -88,9 +104,25 @@ class FakeCatalog:
 class FakeBadJsonThenValidLLM:
     def __init__(self) -> None:
         self.calls: list[list[dict]] = []
+        self.call_options: list[dict] = []
 
-    def chat_with_tools(self, messages, tools, max_tokens=1024, tool_choice="auto"):
+    def chat_with_tools(
+        self,
+        messages,
+        tools,
+        max_tokens=1024,
+        tool_choice="auto",
+        response_format_json=False,
+        disable_thinking=None,
+    ):
         self.calls.append([dict(message) for message in messages])
+        self.call_options.append(
+            {
+                "tool_choice": tool_choice,
+                "response_format_json": response_format_json,
+                "disable_thinking": disable_thinking,
+            }
+        )
         if len(self.calls) == 1:
             return {
                 "role": "assistant",
@@ -109,9 +141,25 @@ class FakeBadJsonThenValidLLM:
 class FakeMissingFieldThenValidLLM:
     def __init__(self) -> None:
         self.calls: list[list[dict]] = []
+        self.call_options: list[dict] = []
 
-    def chat_with_tools(self, messages, tools, max_tokens=1024, tool_choice="auto"):
+    def chat_with_tools(
+        self,
+        messages,
+        tools,
+        max_tokens=1024,
+        tool_choice="auto",
+        response_format_json=False,
+        disable_thinking=None,
+    ):
         self.calls.append([dict(message) for message in messages])
+        self.call_options.append(
+            {
+                "tool_choice": tool_choice,
+                "response_format_json": response_format_json,
+                "disable_thinking": disable_thinking,
+            }
+        )
         if len(self.calls) == 1:
             return {
                 "role": "assistant",
@@ -150,6 +198,8 @@ class AgentToolLoopTests(unittest.TestCase):
         self.assertIn("available_tool_manifest", first_payload)
         self.assertEqual(first_payload["available_tool_manifest"][0]["tool"], "sqlmap")
         self.assertFalse(first_payload["tool_execution_boundary"]["host_shell_available_to_llm"])
+        self.assertIsNone(llm.call_options[0]["disable_thinking"])
+        self.assertFalse(llm.call_options[0]["response_format_json"])
 
     def test_bad_json_repair_prompt_includes_error_and_schema_contract(self) -> None:
         llm = FakeBadJsonThenValidLLM()
@@ -173,6 +223,11 @@ class AgentToolLoopTests(unittest.TestCase):
         self.assertIn("attack_surfaces", repair_prompt)
         self.assertIn("test_plans", repair_prompt)
         self.assertIn("Return exactly one valid JSON object", repair_prompt)
+        self.assertIsNone(llm.call_options[0]["disable_thinking"])
+        self.assertFalse(llm.call_options[0]["response_format_json"])
+        self.assertTrue(llm.call_options[1]["disable_thinking"])
+        self.assertTrue(llm.call_options[1]["response_format_json"])
+        self.assertEqual(llm.call_options[1]["tool_choice"], "none")
 
     def test_missing_required_field_triggers_schema_repair(self) -> None:
         llm = FakeMissingFieldThenValidLLM()
@@ -198,6 +253,11 @@ class AgentToolLoopTests(unittest.TestCase):
         self.assertIn("valid JSON, but it did not satisfy", repair_prompt)
         self.assertIn("Missing required top-level fields: test_plans", repair_prompt)
         self.assertIn("Keep arrays empty", repair_prompt)
+        self.assertIsNone(llm.call_options[0]["disable_thinking"])
+        self.assertFalse(llm.call_options[0]["response_format_json"])
+        self.assertTrue(llm.call_options[1]["disable_thinking"])
+        self.assertTrue(llm.call_options[1]["response_format_json"])
+        self.assertEqual(llm.call_options[1]["tool_choice"], "none")
 
 
 if __name__ == "__main__":
