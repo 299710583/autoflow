@@ -68,6 +68,8 @@ class ToolDispatcher:
                 return self._dispatch_web_recon(name, arguments, state)
             if name == "run_shell__bounded_bash":
                 return self._dispatch_shell(name, arguments, state)
+            if name == "run_script__custom_validation":
+                return self._dispatch_custom_script(name, arguments, state)
             if name.startswith("run_script__"):
                 return self._dispatch_script(name, arguments, state)
             if name.startswith("run_") and "__" in name:
@@ -163,6 +165,68 @@ class ToolDispatcher:
             name,
             target,
             stderr,
+            action_id=executed_task.get("action_id"),
+            artifact_id=executed_task.get("artifact_id"),
+        )
+
+    def _dispatch_custom_script(self, name: str, arguments: dict[str, Any], state: AutoFlowState) -> dict[str, Any]:
+        target = canonical_target(str(arguments.get("target", "")))
+        self._require_authorized_target(target, state)
+        flow = state.get("flow")
+        if flow is None:
+            raise ValueError("ToolDispatcher requires state['flow'] for custom script execution")
+        script_source = str(arguments.get("script_source", "")).strip()
+        if not script_source:
+            raise ValueError("Custom validation script requires non-empty script_source")
+        policy_profile = str(arguments.get("policy_profile") or "low_readonly_http")
+        if policy_profile not in {"low_readonly_http", "medium_artifact_script", "high_lab_poc"}:
+            policy_profile = "low_readonly_http"
+        timeout = self._bounded_timeout(arguments.get("timeout"), default=120, minimum=5, maximum=300)
+        artifact_dir = self.artifact_store.reserve_action_path(
+            flow.id,
+            "toolcall_custom_validation",
+            "custom-script-output.txt",
+        ).parent
+        script = self._wrap_custom_script(script_source, target, state.get("target_scope", flow.target_scope))
+        result = self.script_runner.run_script(
+            script=script,
+            target=target,
+            target_scope=state.get("target_scope", flow.target_scope),
+            artifact_dir=artifact_dir,
+            timeout=timeout,
+            policy_profile=policy_profile,
+        )
+        stdout = result.stdout or ""
+        stderr = result.stderr or ""
+        summary = self._summary("script_runner/custom_validation", stdout)
+        executed_task = self._record_artifact_action(
+            state=state,
+            tool="script_runner",
+            profile="custom_validation",
+            action_kind="script",
+            target=target,
+            risk_level=self._script_policy_risk(policy_profile),
+            stdout=stdout,
+            stderr=stderr,
+            succeeded=result.succeeded,
+            summary=summary,
+            artifact_name="custom-script-output.txt",
+            artifact_type=ArtifactType.RAW_OUTPUT,
+        )
+        self._append_observation(state, executed_task)
+        if result.succeeded:
+            return self._ok(
+                name,
+                target,
+                self._json_or_text(stdout, stderr),
+                summary,
+                action_id=executed_task.get("action_id"),
+                artifact_id=executed_task.get("artifact_id"),
+            )
+        return self._error(
+            name,
+            target,
+            stderr or "Custom validation script failed",
             action_id=executed_task.get("action_id"),
             artifact_id=executed_task.get("artifact_id"),
         )
@@ -566,6 +630,32 @@ class ToolDispatcher:
         stdout = stdout or ""
         first_line = next((line.strip() for line in stdout.splitlines() if line.strip()), "")
         return f"{tool} completed: {first_line[:300]}" if first_line else f"{tool} completed"
+
+    def _wrap_custom_script(self, script_source: str, target: str, target_scope: list[str]) -> str:
+        prelude = "\n".join(
+            [
+                "# AutoFlow injected validation context.",
+                f"TARGET = {target!r}",
+                f"TARGET_SCOPE = {target_scope!r}",
+                "ARTIFACT_DIR = '/work/artifacts'",
+                "",
+            ]
+        )
+        return prelude + script_source.strip() + "\n"
+
+    def _bounded_timeout(self, value: Any, *, default: int, minimum: int, maximum: int) -> int:
+        try:
+            parsed = int(str(value)) if value not in (None, "") else default
+        except ValueError:
+            parsed = default
+        return max(minimum, min(maximum, parsed))
+
+    def _script_policy_risk(self, policy_profile: str) -> str:
+        if policy_profile == "high_lab_poc":
+            return "high"
+        if policy_profile == "medium_artifact_script":
+            return "medium"
+        return "low"
 
     def _write_text_artifact(self, path: Path, stdout: str, stderr: str) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)

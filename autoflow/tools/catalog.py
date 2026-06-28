@@ -78,6 +78,8 @@ class ToolCatalog:
             functions.append(self._web_recon_tool())
         if self._phase_allows_builtin(phases, {"validation", "artifact_audit"}):
             functions.append(self._bounded_shell_tool())
+        if self._phase_allows_builtin(phases, {"validation"}):
+            functions.append(self._custom_validation_script_tool())
         functions.extend(self._container_tool_functions(phases))
         functions.extend(self._script_tool_functions(phases))
         return functions
@@ -214,6 +216,55 @@ class ToolCatalog:
                 "additionalProperties": False,
             },
             metadata={"kind": "shell", "tool": "bash_runner", "profile": "bounded_bash", "risk_level": "medium"},
+        )
+
+    def _custom_validation_script_tool(self) -> ToolFunction:
+        return ToolFunction(
+            name="run_script__custom_validation",
+            description=(
+                "Run a custom Python validation script written by the LLM inside the disposable AutoFlow Docker "
+                "tool container, never on the host. Use this when existing tool profiles do not answer a specific "
+                "validation question. The script is statically checked by ScriptPolicy, receives TARGET, "
+                "TARGET_SCOPE, and ARTIFACT_DIR variables, should use short timeouts, and should print one concise "
+                "JSON object with evidence."
+            ),
+            parameters={
+                "type": "object",
+                "properties": {
+                    "target": {"type": "string", "description": "Authorized HTTP/HTTPS target or endpoint."},
+                    "script_source": {
+                        "type": "string",
+                        "description": (
+                            "Complete Python 3 script body. Prefer urllib/json/re/time/socket/ssl. "
+                            "Use the provided TARGET variable instead of inventing targets. Print one JSON object."
+                        ),
+                    },
+                    "policy_profile": {
+                        "type": "string",
+                        "enum": ["low_readonly_http", "medium_artifact_script", "high_lab_poc"],
+                        "description": (
+                            "Script policy profile. Prefer low_readonly_http for HTTP evidence; use "
+                            "medium_artifact_script only when artifact writes or approved subprocess helpers are needed."
+                        ),
+                    },
+                    "timeout": {
+                        "type": "string",
+                        "description": "Maximum runtime seconds, normally 30-120.",
+                    },
+                    "rationale": {
+                        "type": "string",
+                        "description": "Why this custom script is needed instead of an existing tool.",
+                    },
+                },
+                "required": ["target", "script_source"],
+                "additionalProperties": False,
+            },
+            metadata={
+                "kind": "custom_script",
+                "tool": "script_runner",
+                "profile": "custom_validation",
+                "risk_level": "medium",
+            },
         )
 
     def _read_agent_memory_tool(self) -> ToolFunction:
