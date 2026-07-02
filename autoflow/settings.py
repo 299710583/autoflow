@@ -29,6 +29,8 @@ class Settings(BaseSettings):
     llm_max_retries: int = 1
     llm_disable_thinking: bool = False
     llm_disable_thinking_for_json: bool = True
+    memory_context_window_tokens: int = 128000
+    memory_reserved_output_tokens: int = 6000
 
 
 settings = Settings()

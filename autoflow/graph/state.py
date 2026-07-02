@@ -21,6 +21,8 @@ class AutoFlowState(TypedDict, total=False):
     web_recon: list[dict]
     agent_memory: dict
     memory_context: dict
+    memory_budget_reports: list[dict]
+    last_memory_budget: dict
     attack_surfaces: list[dict]
     follow_up_tasks: list[dict]
     executed_tasks: list[dict]

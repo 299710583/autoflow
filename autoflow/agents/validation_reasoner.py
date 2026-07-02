@@ -9,6 +9,7 @@ from autoflow.agents.tool_loop import AgentToolLoop
 from autoflow.flows.models import FindingConfidence, ValidationResultStatus
 from autoflow.graph.state import AutoFlowState
 from autoflow.memory.agent_memory import AgentMemoryBuilder
+from autoflow.memory.compressor import MemoryCompressor
 
 
 VALIDATION_TOOL_PHASES = {"validation"}
@@ -117,9 +118,11 @@ class ValidationReActReasoner:
         self,
         tool_loop: AgentToolLoop | None = None,
         memory_builder: AgentMemoryBuilder | None = None,
+        memory_compressor: MemoryCompressor | None = None,
     ) -> None:
         self.tool_loop = tool_loop or AgentToolLoop(max_tool_rounds=5, max_tool_calls=8, max_tokens=1024)
         self.memory_builder = memory_builder or AgentMemoryBuilder()
+        self.memory_compressor = memory_compressor or MemoryCompressor()
 
     def reason(
         self,
@@ -187,18 +190,35 @@ class ValidationReActReasoner:
         task: str,
     ) -> dict[str, Any]:
         memory_pack = self.memory_builder.build(state, persisted_memory=state.get("agent_memory"))
+        validation_memory_view = self.memory_compressor.build_for_agent(
+            state,
+            agent_name="validation_react",
+            focus={
+                "finding": finding,
+                "finding_id": finding.get("id"),
+                "target": finding.get("target"),
+                "category": (finding.get("metadata") or {}).get("category")
+                if isinstance(finding.get("metadata"), dict)
+                else "",
+            },
+            base_memory=memory_pack,
+            validation_plan=plan,
+            recent_tool_results=action_results,
+        )
+        self._record_memory_budget(state, validation_memory_view)
         payload = {
             "task": task,
             "mode": "react_validation",
-            "memory_pack": self._compact_memory_pack(memory_pack),
+            "memory_pack": validation_memory_view.get("base_memory_summary", self._compact_memory_pack(memory_pack)),
+            "validation_memory_view": validation_memory_view,
             "finding": finding,
             "validation_plan": plan,
             "validation_context": self._validation_context(state, finding),
             "action_results": self._compact_action_results(action_results),
-            "recent_tool_observations": self._compact_observations(state.get("tool_observations", [])[-30:]),
-            "related_tool_observations": self._related_observations(state, finding),
-            "recent_executed_tasks": self._compact_executed_tasks(state.get("executed_tasks", [])[-30:]),
-            "existing_validation_results": state.get("validation_results", [])[-30:],
+            "recent_tool_observations": validation_memory_view.get("related_observations", [])[:12],
+            "related_tool_observations": validation_memory_view.get("related_observations", []),
+            "recent_executed_tasks": self._compact_executed_tasks(state.get("executed_tasks", [])[-12:]),
+            "existing_validation_results": validation_memory_view.get("related_validation_history", []),
             "known_targets": sorted(self._known_targets(state)),
             "recommended_tools": sorted(self._recommended_tool_names_for_payload({"finding": finding})),
             "decision_rules": {
@@ -290,6 +310,17 @@ class ValidationReActReasoner:
             },
         }
         return payload
+
+    def _record_memory_budget(self, state: AutoFlowState, memory_view: dict[str, Any]) -> None:
+        report = memory_view.get("budget_report")
+        if not isinstance(report, dict):
+            return
+        reports = state.get("memory_budget_reports", [])
+        if not isinstance(reports, list):
+            reports = []
+        reports.append(report)
+        state["memory_budget_reports"] = reports[-50:]
+        state["last_memory_budget"] = report
 
     def _with_validation_tool_manifest(self, payload: dict[str, Any]) -> dict[str, Any]:
         enriched = dict(payload)
